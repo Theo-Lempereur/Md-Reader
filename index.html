@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Marque-page — éditeur Markdown</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /* Print: hide chrome, only show content */
+      @media print {
+        .topbar,
+        .toolbar-wrap,
+        .statusbar,
+        .twk-panel,
+        .search-overlay,
+        .floating-toolbar {
+          display: none !important;
+        }
+        .content {
+          overflow: visible !important;
+        }
+        .reading {
+          max-width: 100% !important;
+          padding: 0 !important;
+        }
+        body,
+        .app {
+          background: #fff !important;
+          color: #000 !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
