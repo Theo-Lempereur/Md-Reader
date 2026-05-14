@@ -1,4 +1,5 @@
 import { forwardRef, useImperativeHandle, useRef } from "react";
+import { normalizeMarkdown } from "../markdown/normalize";
 import { highlightSearch, marginIcon, tokenizeLine } from "../markdown/source";
 import type { SearchHit } from "../types";
 import type { ToolbarAction } from "./Toolbar";
@@ -28,17 +29,18 @@ export const SourceView = forwardRef<SourceViewHandle, Props>(
         },
         getMarkdown: () => {
           const root = rootRef.current;
-          if (!root) return content;
+          if (!root) return normalizeMarkdown(content);
           const lines = Array.from(
             root.querySelectorAll<HTMLDivElement>(".src-content"),
           ).map((el) => (el.textContent || "").replace(/​/g, ""));
-          return lines.join("\n");
+          return normalizeMarkdown(lines.join("\n"));
         },
       }),
       [content, onInput],
     );
 
-    const lines = content.split("\n");
+    const normalizedContent = normalizeMarkdown(content);
+    const lines = normalizedContent.split("\n");
     return (
       <div
         className="source"

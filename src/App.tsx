@@ -17,6 +17,7 @@ import {
   renderMarkdownBlocks,
   type BlockInfo,
 } from "./markdown/render";
+import { normalizeMarkdown } from "./markdown/normalize";
 import { tokenizeLine, marginIcon } from "./markdown/source";
 import { Icon } from "./components/Icons";
 import { SourceView, type SourceViewHandle } from "./components/SourceView";
@@ -73,6 +74,8 @@ const DEFAULT_TWEAKS: Tweaks = {
 
 const TEXT_WIDTH_MIN = 30;
 const TEXT_WIDTH_MAX = 100;
+const TEXT_WIDTH_WHEEL_STEP = 2;
+const TEXT_WIDTH_WHEEL_THRESHOLD = 60;
 
 const TWEAKS_STORAGE_KEY = "md-reader:tweaks";
 
@@ -136,6 +139,10 @@ function loadTweaks(): Tweaks {
   }
 }
 
+function clampTextWidth(value: number): number {
+  return Math.min(TEXT_WIDTH_MAX, Math.max(TEXT_WIDTH_MIN, value));
+}
+
 type SidePanel =
   | { mode: "block"; block: BlockInfo }
   | { mode: "full"; initialBlock: BlockInfo }
@@ -152,7 +159,7 @@ function SourceMini({
   lineEls?: React.MutableRefObject<Map<number, HTMLDivElement>>;
   currentSyncLine?: number | null;
 }) {
-  const lines = content.split("\n");
+  const lines = normalizeMarkdown(content).split("\n");
   return (
     <div className="source source-mini">
       {lines.map((line, i) => {
@@ -185,14 +192,21 @@ function SourceMini({
   );
 }
 
+function normalizeTabContent(tab: MdFile): MdFile {
+  const content = normalizeMarkdown(tab.content);
+  return content === tab.content ? tab : { ...tab, content };
+}
+
 function App() {
   const [tweaks, setTweaks] = useState<Tweaks>(loadTweaks);
   const setTweak = <K extends keyof Tweaks>(key: K, value: Tweaks[K]) =>
     setTweaks((t) => ({ ...t, [key]: value }));
 
-  const [tabs, setTabs] = useState<MdFile[]>(SAMPLE_FILES);
+  const [tabs, setTabs] = useState<MdFile[]>(
+    SAMPLE_FILES.map(normalizeTabContent),
+  );
   const [activeId, setActiveId] = useState<string>(SAMPLE_FILES[0].id);
-  const tabsRef = useRef<MdFile[]>(SAMPLE_FILES);
+  const tabsRef = useRef<MdFile[]>(SAMPLE_FILES.map(normalizeTabContent));
   const [editMode, setEditMode] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("preview");
   const [exportOpen, setExportOpen] = useState(false);
@@ -214,6 +228,7 @@ function App() {
   >(new Map());
   const lineEls = useRef<Map<number, HTMLDivElement>>(new Map());
   const syncingRef = useRef(false);
+  const textWidthWheelDeltaRef = useRef(0);
   const wysiwygHandles = useRef<Map<string, WysiwygEditorHandle | null>>(
     new Map(),
   );
@@ -251,18 +266,20 @@ function App() {
       if (viewMode === "preview" && newMode === "source") {
         const md = wysiwygHandles.current.get(activeId)?.getMarkdown();
         if (md != null) {
+          const content = normalizeMarkdown(md);
           setTabs((prev) =>
-            prev.map((t) => (t.id === activeId ? { ...t, content: md } : t)),
+            prev.map((t) => (t.id === activeId ? { ...t, content } : t)),
           );
         }
       } else {
         const md = sourceRef.current?.getMarkdown();
         if (md != null) {
+          const content = normalizeMarkdown(md);
           setTabs((prev) =>
-            prev.map((t) => (t.id === activeId ? { ...t, content: md } : t)),
+            prev.map((t) => (t.id === activeId ? { ...t, content } : t)),
           );
           // WYSIWYG-active reste monté (key stable). On rafraîchit son DOM.
-          wysiwygHandles.current.get(activeId)?.refreshFromContent(md);
+          wysiwygHandles.current.get(activeId)?.refreshFromContent(content);
         }
       }
       setViewMode(newMode);
@@ -276,23 +293,28 @@ function App() {
       if (sourceVisible) {
         const md = sourceRef.current?.getMarkdown();
         if (md != null) {
+          const content = normalizeMarkdown(md);
           setTabs((prev) =>
-            prev.map((t) => (t.id === activeId ? { ...t, content: md } : t)),
+            prev.map((t) => (t.id === activeId ? { ...t, content } : t)),
           );
-          wysiwygHandles.current.get(activeId)?.refreshFromContent(md);
+          wysiwygHandles.current.get(activeId)?.refreshFromContent(content);
         }
       } else {
         const md = wysiwygHandles.current.get(activeId)?.getMarkdown();
         if (md != null) {
+          const content = normalizeMarkdown(md);
           setTabs((prev) =>
-            prev.map((t) => (t.id === activeId ? { ...t, content: md } : t)),
+            prev.map((t) => (t.id === activeId ? { ...t, content } : t)),
           );
         }
       }
     } else {
       // Activer l'édition : synchronise le WYSIWYG avec le contenu courant.
       const tab = tabsRef.current.find((t) => t.id === activeId);
-      if (tab) wysiwygHandles.current.get(activeId)?.refreshFromContent(tab.content);
+      if (tab)
+        wysiwygHandles.current
+          .get(activeId)
+          ?.refreshFromContent(normalizeMarkdown(tab.content));
     }
     setSidePanel(null);
     setEditMode((v) => !v);
@@ -306,10 +328,11 @@ function App() {
       if (sourceVisible) {
         const md = sourceRef.current?.getMarkdown();
         if (md != null) {
+          const content = normalizeMarkdown(md);
           setTabs((prev) =>
-            prev.map((t) => (t.id === activeId ? { ...t, content: md } : t)),
+            prev.map((t) => (t.id === activeId ? { ...t, content } : t)),
           );
-          wysiwygHandles.current.get(activeId)?.refreshFromContent(md);
+          wysiwygHandles.current.get(activeId)?.refreshFromContent(content);
         }
       }
       setActiveId(newId);
@@ -322,7 +345,37 @@ function App() {
   }, [tweaks]);
 
   useEffect(() => {
-    tabsRef.current = tabs;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+
+      textWidthWheelDeltaRef.current += e.deltaY;
+      if (
+        Math.abs(textWidthWheelDeltaRef.current) < TEXT_WIDTH_WHEEL_THRESHOLD
+      ) {
+        return;
+      }
+
+      const direction = textWidthWheelDeltaRef.current < 0 ? 1 : -1;
+      textWidthWheelDeltaRef.current = 0;
+      setTweaks((current) => ({
+        ...current,
+        textWidth: clampTextWidth(
+          current.textWidth + direction * TEXT_WIDTH_WHEEL_STEP,
+        ),
+      }));
+    };
+
+    window.addEventListener("wheel", onWheel, { passive: false });
+    return () => window.removeEventListener("wheel", onWheel);
+  }, []);
+
+  useEffect(() => {
+    const normalizedTabs = tabs.map(normalizeTabContent);
+    const changed = normalizedTabs.some((tab, index) => tab !== tabs[index]);
+
+    tabsRef.current = normalizedTabs;
+    if (changed) setTabs(normalizedTabs);
   }, [tabs]);
 
   // File actions
@@ -331,7 +384,7 @@ function App() {
     const f: MdFile = {
       id,
       name: "sans-titre.md",
-      content: "# Nouveau document\n\nCommencez à écrire…\n",
+      content: normalizeMarkdown("# Nouveau document\n\nCommencez à écrire…\n"),
     };
     setTabs((prev) => [...prev, f]);
     setActiveId(id);
@@ -347,7 +400,7 @@ function App() {
     const id = `file-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const nextTabs = [
       ...tabsRef.current,
-      { id, name: f.name, content: f.content, path: f.path },
+      { id, name: f.name, content: normalizeMarkdown(f.content), path: f.path },
     ];
     tabsRef.current = nextTabs;
     setTabs(nextTabs);
@@ -384,12 +437,19 @@ function App() {
     const tab = tabs.find((t) => t.id === activeId);
     if (!tab) return;
     try {
-      const path = await saveAsDialog(md, tab.name);
+      const content = normalizeMarkdown(md);
+      const path = await saveAsDialog(content, tab.name);
       if (!path) return;
       setTabs((prev) =>
         prev.map((t) =>
           t.id === activeId
-            ? { ...t, content: md, path, name: basename(path), dirty: false }
+            ? {
+                ...t,
+                content,
+                path,
+                name: basename(path),
+                dirty: false,
+              }
             : t,
         ),
       );
@@ -408,10 +468,13 @@ function App() {
       return;
     }
     try {
-      await writeToPath(tab.path, md);
+      const content = normalizeMarkdown(md);
+      await writeToPath(tab.path, content);
       setTabs((prev) =>
         prev.map((t) =>
-          t.id === activeId ? { ...t, content: md, dirty: false } : t,
+          t.id === activeId
+            ? { ...t, content, dirty: false }
+            : t,
         ),
       );
     } catch (err) {
@@ -431,11 +494,12 @@ function App() {
             ? sourceRef.current?.getMarkdown()
             : wysiwygHandles.current.get(t.id)?.getMarkdown();
         if (md == null || !t.path) continue;
-        writeToPath(t.path, md)
+        const content = normalizeMarkdown(md);
+        writeToPath(t.path, content)
           .then(() => {
             setTabs((prev) =>
               prev.map((x) =>
-                x.id === t.id ? { ...x, content: md, dirty: false } : x,
+                x.id === t.id ? { ...x, content, dirty: false } : x,
               ),
             );
           })
@@ -836,6 +900,7 @@ function App() {
                     style={{
                       display: editorVisible ? "block" : "none",
                       height: "100%",
+                      position: "relative",
                     }}
                   >
                     <WysiwygEditor
@@ -847,6 +912,26 @@ function App() {
                       enabled={editMode && isActive}
                       onInput={() => markDirty(tab.id)}
                     />
+                    {isActive && editMode && viewMode === "preview" && active && (
+                      <div className="reading reading-blocks-overlay" aria-hidden="true">
+                        {renderMarkdownBlocks(active.content, {
+                          onInspect: (b) =>
+                            setSidePanel((prev) =>
+                              prev?.mode === "block" && prev.block.key === b.key
+                                ? null
+                                : { mode: "block", block: b },
+                            ),
+                          onOpenFull: (b) =>
+                            setSidePanel((prev) =>
+                              prev?.mode === "full" ? null : { mode: "full", initialBlock: b },
+                            ),
+                          selectedBlockKey:
+                            sidePanel?.mode === "block" ? sidePanel.block.key : null,
+                          inspectMode: sidePanel?.mode ?? null,
+                          blockEls,
+                        })}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -855,9 +940,16 @@ function App() {
               {!editMode && (
                 <div className="reading">
                   {renderMarkdownBlocks(active.content, {
-                    onInspect: (b) => setSidePanel({ mode: "block", block: b }),
+                    onInspect: (b) =>
+                      setSidePanel((prev) =>
+                        prev?.mode === "block" && prev.block.key === b.key
+                          ? null
+                          : { mode: "block", block: b },
+                      ),
                     onOpenFull: (b) =>
-                      setSidePanel({ mode: "full", initialBlock: b }),
+                      setSidePanel((prev) =>
+                        prev?.mode === "full" ? null : { mode: "full", initialBlock: b },
+                      ),
                     selectedBlockKey:
                       sidePanel?.mode === "block" ? sidePanel.block.key : null,
                     inspectMode: sidePanel?.mode ?? null,

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import katex from "katex";
 import { Icon } from "../components/Icons";
 
@@ -147,6 +147,108 @@ export function inlineRender(text: string): ReactNode[] {
 }
 
 type ListItem = { task: boolean; done?: boolean; text: string };
+type TableAlign = "left" | "center" | "right" | null;
+type MarkdownTable = {
+  headers: string[];
+  aligns: TableAlign[];
+  rows: string[][];
+  lineEnd: number;
+};
+
+const ORDERED_LIST_RE = /^\d+\\*\.\s/;
+const ORDERED_LIST_PREFIX_RE = /^\d+\\*\.\s+/;
+const BLOCK_START_RE = /^(#{1,6}\s|[-*]\s|\d+\\*\.\s|>\s|```|\s*\$|---+\s*$)/;
+
+function isEscaped(text: string, index: number): boolean {
+  let slashCount = 0;
+  for (let i = index - 1; i >= 0 && text[i] === "\\"; i--) slashCount++;
+  return slashCount % 2 === 1;
+}
+
+function splitTableRow(line: string): string[] {
+  let text = line.trim();
+  if (text.startsWith("|")) text = text.slice(1);
+  if (text.endsWith("|") && !isEscaped(text, text.length - 1)) {
+    text = text.slice(0, -1);
+  }
+
+  const cells: string[] = [];
+  let current = "";
+  let inCode = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (char === "`" && !isEscaped(text, i)) inCode = !inCode;
+    if (char === "|" && !inCode && !isEscaped(text, i)) {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+    if (char === "\\" && text[i + 1] === "|") {
+      current += "|";
+      i++;
+      continue;
+    }
+    current += char;
+  }
+
+  cells.push(current.trim());
+  return cells;
+}
+
+function parseTableDivider(line: string): TableAlign[] | null {
+  if (!line.includes("|")) return null;
+  const cells = splitTableRow(line);
+  if (!cells.length) return null;
+
+  const aligns: TableAlign[] = [];
+  for (const cell of cells) {
+    const value = cell.trim();
+    if (!/^:?-{3,}:?$/.test(value)) return null;
+    const left = value.startsWith(":");
+    const right = value.endsWith(":");
+    aligns.push(left && right ? "center" : right ? "right" : left ? "left" : null);
+  }
+  return aligns;
+}
+
+function normalizeTableCells<T>(cells: T[], colCount: number, fill: T): T[] {
+  if (cells.length >= colCount) return cells.slice(0, colCount);
+  return [...cells, ...Array.from({ length: colCount - cells.length }, () => fill)];
+}
+
+function parseTableAt(lines: string[], start: number): MarkdownTable | null {
+  if (start + 1 >= lines.length || !lines[start].includes("|")) return null;
+
+  const headerCells = splitTableRow(lines[start]);
+  const dividerAligns = parseTableDivider(lines[start + 1]);
+  if (!dividerAligns || headerCells.length < 1) return null;
+
+  let i = start + 2;
+  const bodyRows: string[][] = [];
+  while (i < lines.length && lines[i].trim() !== "" && lines[i].includes("|")) {
+    if (parseTableDivider(lines[i])) break;
+    bodyRows.push(splitTableRow(lines[i]));
+    i++;
+  }
+
+  const colCount = Math.max(
+    headerCells.length,
+    dividerAligns.length,
+    ...bodyRows.map((row) => row.length),
+  );
+
+  return {
+    headers: normalizeTableCells(headerCells, colCount, ""),
+    aligns: normalizeTableCells<TableAlign>(dividerAligns, colCount, null),
+    rows: bodyRows.map((row) => normalizeTableCells(row, colCount, "")),
+    lineEnd: i - 1,
+  };
+}
+
+function tableAlignStyle(align: TableAlign): CSSProperties | undefined {
+  return align ? { textAlign: align } : undefined;
+}
 
 export function renderMarkdown(md: string): ReactNode[] {
   const lines = md.split("\n");
@@ -277,6 +379,46 @@ export function renderMarkdown(md: string): ReactNode[] {
       );
       continue;
     }
+    // Table
+    const table = parseTableAt(lines, i);
+    if (table) {
+      blocks.push(
+        <div key={key++} className="md-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                {table.headers.map((cell, col) => (
+                  <th
+                    key={col}
+                    data-align={table.aligns[col] ?? undefined}
+                    style={tableAlignStyle(table.aligns[col])}
+                  >
+                    {inlineRender(cell)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {table.rows.map((row, rowIdx) => (
+                <tr key={rowIdx}>
+                  {row.map((cell, col) => (
+                    <td
+                      key={col}
+                      data-align={table.aligns[col] ?? undefined}
+                      style={tableAlignStyle(table.aligns[col])}
+                    >
+                      {inlineRender(cell)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      );
+      i = table.lineEnd + 1;
+      continue;
+    }
     // Unordered list (incl. task)
     if (/^[-*]\s/.test(line)) {
       const items: ListItem[] = [];
@@ -312,10 +454,10 @@ export function renderMarkdown(md: string): ReactNode[] {
       continue;
     }
     // Ordered list
-    if (/^\d+\.\s/.test(line)) {
+    if (ORDERED_LIST_RE.test(line)) {
       const items: string[] = [];
-      while (i < lines.length && /^\d+\.\s/.test(lines[i])) {
-        items.push(lines[i].replace(/^\d+\.\s+/, ""));
+      while (i < lines.length && ORDERED_LIST_RE.test(lines[i])) {
+        items.push(lines[i].replace(ORDERED_LIST_PREFIX_RE, ""));
         i++;
       }
       blocks.push(
@@ -337,9 +479,8 @@ export function renderMarkdown(md: string): ReactNode[] {
     while (
       i < lines.length &&
       lines[i].trim() !== "" &&
-      !/^(#{1,6}\s|[-*]\s|\d+\.\s|>\s|```|\s*\$|---+\s*$)/.test(
-        lines[i],
-      )
+      !BLOCK_START_RE.test(lines[i]) &&
+      !parseTableAt(lines, i)
     ) {
       ps.push(lines[i]);
       i++;
@@ -417,6 +558,12 @@ function parseBlockBounds(md: string): BlockBounds[] {
       bounds.push({ lineStart, lineEnd: i - 1, kind: "formule" });
       continue;
     }
+    const table = parseTableAt(lines, i);
+    if (table) {
+      i = table.lineEnd + 1;
+      bounds.push({ lineStart, lineEnd: i - 1, kind: "tableau" });
+      continue;
+    }
     if (/^[-*]\s/.test(line)) {
       while (i < lines.length && /^[-*]\s/.test(lines[i])) i++;
       const hasTasks = lines
@@ -429,8 +576,8 @@ function parseBlockBounds(md: string): BlockBounds[] {
       });
       continue;
     }
-    if (/^\d+\.\s/.test(line)) {
-      while (i < lines.length && /^\d+\.\s/.test(lines[i])) i++;
+    if (ORDERED_LIST_RE.test(line)) {
+      while (i < lines.length && ORDERED_LIST_RE.test(lines[i])) i++;
       bounds.push({ lineStart, lineEnd: i - 1, kind: "liste numérotée" });
       continue;
     }
@@ -442,7 +589,8 @@ function parseBlockBounds(md: string): BlockBounds[] {
     while (
       i < lines.length &&
       lines[i].trim() !== "" &&
-      !/^(#{1,6}\s|[-*]\s|\d+\.\s|>\s|```|\s*\$|---+\s*$)/.test(lines[i])
+      !BLOCK_START_RE.test(lines[i]) &&
+      !parseTableAt(lines, i)
     )
       i++;
     bounds.push({ lineStart, lineEnd: i - 1, kind: "paragraphe" });

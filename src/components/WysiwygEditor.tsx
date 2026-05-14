@@ -5,6 +5,7 @@ import {
   useRef,
 } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { normalizeMarkdown } from "../markdown/normalize";
 import { renderMarkdown } from "../markdown/render";
 import { htmlToMarkdown } from "../lib/htmlToMarkdown";
 import type { ToolbarAction } from "./Toolbar";
@@ -34,8 +35,9 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
     // sauvegarde (qui met à jour tab.content) écraserait les modifs DOM en cours.
     useEffect(() => {
       if (!divRef.current || mountedRef.current) return;
+      const content = normalizeMarkdown(initialContent);
       divRef.current.innerHTML = renderToStaticMarkup(
-        <>{renderMarkdown(initialContent)}</>,
+        <>{renderMarkdown(content)}</>,
       );
       mountedRef.current = true;
     }, [initialContent]);
@@ -65,8 +67,9 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
         },
         refreshFromContent: (content) => {
           if (!divRef.current) return;
+          const normalizedContent = normalizeMarkdown(content);
           divRef.current.innerHTML = renderToStaticMarkup(
-            <>{renderMarkdown(content)}</>,
+            <>{renderMarkdown(normalizedContent)}</>,
           );
         },
       }),

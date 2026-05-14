@@ -1,4 +1,5 @@
 import TurndownService from "turndown";
+import { normalizeMarkdown } from "../markdown/normalize";
 
 const td = new TurndownService({
   bulletListMarker: "-",
@@ -53,6 +54,69 @@ td.addRule("taskListItem", {
   },
 });
 
+td.addRule("table", {
+  filter: "table",
+  replacement: (_content, node) => {
+    const table = node as HTMLTableElement;
+    const allRows = Array.from(table.querySelectorAll("tr"));
+    if (!allRows.length) return "";
+
+    const headerRow = table.tHead?.rows[0] ?? allRows[0];
+    const headerCells = Array.from(headerRow.cells);
+    const bodyRows = table.tBodies.length
+      ? Array.from(table.tBodies).flatMap((body) => Array.from(body.rows))
+      : allRows.slice(headerRow === allRows[0] ? 1 : 0);
+
+    const rows = bodyRows.map((row) => Array.from(row.cells));
+    const colCount = Math.max(
+      headerCells.length,
+      ...rows.map((row) => row.length),
+      1,
+    );
+    const headers = normalizeCells(headerCells.map(markdownCell), colCount);
+    const aligns = normalizeCells(headerCells.map(cellAlignment), colCount);
+    const separator = aligns.map((align) => {
+      if (align === "center") return ":---:";
+      if (align === "right") return "---:";
+      if (align === "left") return ":---";
+      return "---";
+    });
+    const body = rows.map((row) =>
+      normalizeCells(row.map(markdownCell), colCount),
+    );
+
+    return `\n\n${[headers, separator, ...body]
+      .map((row) => `| ${row.join(" | ")} |`)
+      .join("\n")}\n\n`;
+  },
+});
+
+function markdownCell(cell: HTMLTableCellElement): string {
+  return td
+    .turndown(cell.innerHTML)
+    .replace(/\n+/g, " ")
+    .replace(/\|/g, "\\|")
+    .trim();
+}
+
+function cellAlignment(cell: HTMLTableCellElement): string {
+  const dataAlign = cell.getAttribute("data-align");
+  if (dataAlign === "left" || dataAlign === "center" || dataAlign === "right") {
+    return dataAlign;
+  }
+
+  const styleAlign = cell.style.textAlign;
+  return styleAlign === "left" || styleAlign === "center" || styleAlign === "right"
+    ? styleAlign
+    : "";
+}
+
+function normalizeCells<T>(cells: T[], colCount: number): T[] {
+  return cells.length >= colCount
+    ? cells.slice(0, colCount)
+    : [...cells, ...Array.from({ length: colCount - cells.length }, () => "" as T)];
+}
+
 export function htmlToMarkdown(html: string): string {
-  return td.turndown(html).trim() + "\n";
+  return normalizeMarkdown(td.turndown(html)).trim() + "\n";
 }

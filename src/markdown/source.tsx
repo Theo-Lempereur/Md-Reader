@@ -17,7 +17,11 @@ const TIPS: Record<string, string> = {
   ")": "",
   "[ ]": "Tâche à faire",
   "[x]": "Tâche terminée",
+  "|": "Tableau",
 };
+
+const ORDERED_LIST_LINE_RE = /^(\d+\\*\.)(\s+)(.*)$/;
+const ORDERED_LIST_MARKER_RE = /^\d+\\*\.\s/;
 
 function withTip(content: string, tip: string, key: string): ReactNode {
   return (
@@ -121,6 +125,39 @@ export function tokenizeLine(line: string, lineNum: number): ReactNode {
       </>
     );
   }
+  // Table row
+  if (/^\s*\|.*\|\s*$/.test(line)) {
+    const parts: ReactNode[] = [];
+    const re = /(\|)/g;
+    let last = 0;
+    let match: RegExpExecArray | null;
+    let i = 0;
+
+    while ((match = re.exec(line))) {
+      if (match.index > last) {
+        const cellText = line.slice(last, match.index);
+        const isDivider = /^:?-{3,}:?$/.test(cellText.trim());
+        parts.push(
+          <span
+            key={`${baseKey}-table-cell-${i++}`}
+            className={isDivider ? "md-table-divider" : undefined}
+          >
+            {isDivider ? cellText : inlineTokens(cellText, `${baseKey}-table-${i}`)}
+          </span>,
+        );
+      }
+      parts.push(withTip("|", TIPS["|"], `${baseKey}-table-pipe-${i++}`));
+      last = match.index + 1;
+    }
+    if (last < line.length) {
+      parts.push(
+        <span key={`${baseKey}-table-end-${i++}`}>
+          {inlineTokens(line.slice(last), `${baseKey}-table-end`)}
+        </span>,
+      );
+    }
+    return <>{parts}</>;
+  }
   // Task list item
   m = line.match(/^([-*])(\s+)\[([ xX])\](\s+)(.*)$/);
   if (m) {
@@ -155,7 +192,7 @@ export function tokenizeLine(line: string, lineNum: number): ReactNode {
     );
   }
   // Ordered list
-  m = line.match(/^(\d+\.)(\s+)(.*)$/);
+  m = line.match(ORDERED_LIST_LINE_RE);
   if (m) {
     return (
       <>
@@ -210,7 +247,8 @@ export function marginIcon(
   if (/^####\s/.test(line)) return { label: "H4", cls: "h3" };
   if (/^[-*]\s\[/.test(line)) return { label: "☐", cls: "list" };
   if (/^[-*]\s/.test(line)) return { label: "•", cls: "list" };
-  if (/^\d+\.\s/.test(line)) return { label: "№", cls: "list" };
+  if (ORDERED_LIST_MARKER_RE.test(line)) return { label: "№", cls: "list" };
+  if (/^\s*\|.*\|\s*$/.test(line)) return { label: "▦", cls: "table" };
   if (/^>\s/.test(line)) return { label: '"', cls: "quote" };
   if (/^```/.test(line)) return { label: "</>", cls: "code" };
   if (/^---+\s*$/.test(line)) return { label: "—", cls: "hr" };
