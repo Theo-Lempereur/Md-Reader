@@ -1,4 +1,14 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+use std::path::{Path, PathBuf};
+use tauri::{Emitter, Listener, Manager};
+
+#[derive(Clone, serde::Serialize)]
+struct OpenFilePayload {
+    path: String,
+    name: String,
+    content: String,
+}
+
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
@@ -12,6 +22,67 @@ async fn read_text_file(path: String) -> Result<String, String> {
 #[tauri::command]
 async fn write_text_file(path: String, content: String) -> Result<(), String> {
     std::fs::write(&path, content).map_err(|e| e.to_string())
+}
+
+fn is_markdown_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
+}
+
+fn resolve_markdown_arg(arg: &str, cwd: Option<&Path>) -> Option<PathBuf> {
+    let raw = arg.trim_matches('"');
+    if raw.is_empty() {
+        return None;
+    }
+
+    let candidate = PathBuf::from(raw);
+    let path = if candidate.is_absolute() {
+        candidate
+    } else if let Some(cwd) = cwd {
+        cwd.join(candidate)
+    } else {
+        candidate
+    };
+
+    if path.is_file() && is_markdown_path(&path) {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+fn open_file_in_app(app: &tauri::AppHandle, path: PathBuf) {
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "document.md".to_string());
+
+    let _ = window.emit(
+        "open-file",
+        OpenFilePayload {
+            path: path.to_string_lossy().into_owned(),
+            name,
+            content,
+        },
+    );
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+}
+
+fn open_argv_files(app: &tauri::AppHandle, argv: &[String], cwd: Option<&Path>) {
+    for arg in argv.iter().skip(1) {
+        if let Some(path) = resolve_markdown_arg(arg, cwd) {
+            open_file_in_app(app, path);
+        }
+    }
 }
 
 /// Réactive Aero Snap (drag-to-edge, drag-to-top) avec `decorations: false`.
@@ -139,18 +210,28 @@ mod win_snap {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            open_argv_files(app, &argv, Some(Path::new(&cwd)));
+        }))
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .setup(|_app| {
+        .setup(|app| {
             #[cfg(windows)]
             {
-                use tauri::Manager;
-                if let Some(window) = _app.get_webview_window("main") {
+                if let Some(window) = app.get_webview_window("main") {
                     win_snap::enable(&window);
                 }
             }
+
+            let app_handle = app.handle().clone();
+            let startup_args: Vec<String> = std::env::args().collect();
+            let startup_cwd = std::env::current_dir().ok();
+            app.listen("frontend-ready", move |_| {
+                open_argv_files(&app_handle, &startup_args, startup_cwd.as_deref());
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

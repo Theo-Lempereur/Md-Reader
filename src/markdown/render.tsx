@@ -1,5 +1,24 @@
 import type { ReactNode } from "react";
 import katex from "katex";
+import { Icon } from "../components/Icons";
+
+export type BlockInfo = {
+  key: number;
+  kind: string;
+  lineStart: number;
+  lineEnd: number;
+  sourceLines: string[];
+};
+
+export type BlockRenderOpts = {
+  onInspect: (block: BlockInfo) => void;
+  onOpenFull: (block: BlockInfo) => void;
+  selectedBlockKey: number | null;
+  inspectMode: "block" | "full" | null;
+  blockEls: React.MutableRefObject<
+    Map<number, { el: HTMLDivElement; lineStart: number; lineEnd: number }>
+  >;
+};
 
 type InlineMathSegment =
   | { type: "text"; value: string }
@@ -336,4 +355,163 @@ export function wordCount(t: string): number {
 }
 export function readTime(t: string): number {
   return Math.max(1, Math.ceil(wordCount(t) / 220));
+}
+
+// ── Block position tracking (for renderMarkdownBlocks) ──────────────────────
+
+type BlockBounds = { lineStart: number; lineEnd: number; kind: string };
+
+function parseBlockBounds(md: string): BlockBounds[] {
+  const lines = md.split("\n");
+  const bounds: BlockBounds[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const lineStart = i;
+    const line = lines[i];
+
+    if (/^(#{1,6})\s+/.test(line)) {
+      const lvl = line.match(/^(#{1,6})/)?.[1].length ?? 1;
+      i++;
+      bounds.push({ lineStart, lineEnd: i - 1, kind: `titre H${lvl}` });
+      continue;
+    }
+    if (/^---+\s*$/.test(line)) {
+      i++;
+      bounds.push({ lineStart, lineEnd: i - 1, kind: "séparateur" });
+      continue;
+    }
+    if (/^>\s?/.test(line)) {
+      while (i < lines.length && /^>\s?/.test(lines[i])) i++;
+      bounds.push({ lineStart, lineEnd: i - 1, kind: "citation" });
+      continue;
+    }
+    if (/^```/.test(line)) {
+      i++;
+      while (i < lines.length && !/^```/.test(lines[i])) i++;
+      i++;
+      bounds.push({ lineStart, lineEnd: i - 1, kind: "code" });
+      continue;
+    }
+    if (/^\s*\$\$/.test(line)) {
+      const openingRest = line.replace(/^\s*\$\$\s?/, "");
+      if (openingRest.includes("$$")) {
+        i++;
+      } else {
+        i++;
+        while (i < lines.length && !/\$\$\s*$/.test(lines[i])) i++;
+        if (i < lines.length) i++;
+      }
+      bounds.push({ lineStart, lineEnd: i - 1, kind: "formule" });
+      continue;
+    }
+    if (/^\s*\$(?!\$)/.test(line)) {
+      const openingRest = line.replace(/^\s*\$\s?/, "");
+      if (openingRest.includes("$")) {
+        i++;
+      } else {
+        i++;
+        while (i < lines.length && !/\$\s*$/.test(lines[i])) i++;
+        if (i < lines.length) i++;
+      }
+      bounds.push({ lineStart, lineEnd: i - 1, kind: "formule" });
+      continue;
+    }
+    if (/^[-*]\s/.test(line)) {
+      while (i < lines.length && /^[-*]\s/.test(lines[i])) i++;
+      const hasTasks = lines
+        .slice(lineStart, i)
+        .some((l) => /^[-*]\s\[/.test(l));
+      bounds.push({
+        lineStart,
+        lineEnd: i - 1,
+        kind: hasTasks ? "liste de tâches" : "liste",
+      });
+      continue;
+    }
+    if (/^\d+\.\s/.test(line)) {
+      while (i < lines.length && /^\d+\.\s/.test(lines[i])) i++;
+      bounds.push({ lineStart, lineEnd: i - 1, kind: "liste numérotée" });
+      continue;
+    }
+    if (line.trim() === "") {
+      i++;
+      continue;
+    }
+    // Paragraph
+    while (
+      i < lines.length &&
+      lines[i].trim() !== "" &&
+      !/^(#{1,6}\s|[-*]\s|\d+\.\s|>\s|```|\s*\$|---+\s*$)/.test(lines[i])
+    )
+      i++;
+    bounds.push({ lineStart, lineEnd: i - 1, kind: "paragraphe" });
+  }
+
+  return bounds;
+}
+
+export function renderMarkdownBlocks(
+  md: string,
+  opts: BlockRenderOpts,
+): ReactNode[] {
+  const rendered = renderMarkdown(md);
+  const bounds = parseBlockBounds(md);
+  const lines = md.split("\n");
+
+  return rendered.map((jsx, idx) => {
+    const b = bounds[idx] ?? { lineStart: 0, lineEnd: 0, kind: "paragraphe" };
+    const info: BlockInfo = {
+      key: idx,
+      kind: b.kind,
+      lineStart: b.lineStart,
+      lineEnd: b.lineEnd,
+      sourceLines: lines.slice(b.lineStart, b.lineEnd + 1),
+    };
+    const isBlockSel =
+      opts.selectedBlockKey === idx && opts.inspectMode === "block";
+    const isFull = opts.inspectMode === "full";
+
+    return (
+      <div
+        key={idx}
+        className={`md-block${isBlockSel ? " selected" : ""}`}
+        ref={(el) => {
+          if (el)
+            opts.blockEls.current.set(idx, {
+              el,
+              lineStart: b.lineStart,
+              lineEnd: b.lineEnd,
+            });
+          else opts.blockEls.current.delete(idx);
+        }}
+      >
+        {jsx}
+        <div className="md-block-tools">
+          <button
+            className={`md-block-btn${isBlockSel ? " active" : ""}`}
+            title={`Source du bloc — ${b.kind}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              opts.onInspect(info);
+            }}
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            <Icon.Code />
+          </button>
+          <button
+            className={`md-block-btn${isFull ? " active" : ""}`}
+            title="Source complète synchronisée"
+            onClick={(e) => {
+              e.stopPropagation();
+              opts.onOpenFull(info);
+            }}
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            <Icon.PanelRight />
+          </button>
+        </div>
+      </div>
+    );
+  });
 }

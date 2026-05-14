@@ -111,6 +111,17 @@ export const Icon = {
       />
     </svg>
   ),
+  PanelRight: () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M14 4v16" />
+      <path
+        d="M16.5 8.5h3M16.5 12h3M16.5 15.5h3"
+        strokeLinecap="round"
+        opacity="0.6"
+      />
+    </svg>
+  ),
   Link: () => (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <path

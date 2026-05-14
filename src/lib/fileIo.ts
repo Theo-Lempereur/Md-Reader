@@ -25,6 +25,15 @@ export async function openFileDialog(): Promise<OpenedFile | null> {
   };
 }
 
+export async function readFileByPath(path: string): Promise<OpenedFile> {
+  const content = await invoke<string>("read_text_file", { path });
+  return {
+    path,
+    name: basename(path),
+    content,
+  };
+}
+
 export async function saveAsDialog(
   content: string,
   suggestedName: string,

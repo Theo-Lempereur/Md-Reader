@@ -6,11 +6,18 @@ import {
   useState,
   type CSSProperties,
 } from "react";
+import { emit, listen } from "@tauri-apps/api/event";
 import "katex/dist/katex.min.css";
 import "./App.css";
 
 import { SAMPLE_FILES } from "./data/sampleFiles";
-import { readTime, wordCount } from "./markdown/render";
+import {
+  readTime,
+  wordCount,
+  renderMarkdownBlocks,
+  type BlockInfo,
+} from "./markdown/render";
+import { tokenizeLine, marginIcon } from "./markdown/source";
 import { Icon } from "./components/Icons";
 import { SourceView, type SourceViewHandle } from "./components/SourceView";
 import {
@@ -38,6 +45,7 @@ import {
   openFileDialog,
   saveAsDialog,
   writeToPath,
+  type OpenedFile,
 } from "./lib/fileIo";
 import type {
   Density,
@@ -128,6 +136,55 @@ function loadTweaks(): Tweaks {
   }
 }
 
+type SidePanel =
+  | { mode: "block"; block: BlockInfo }
+  | { mode: "full"; initialBlock: BlockInfo }
+  | null;
+
+function SourceMini({
+  content,
+  startLine = 0,
+  lineEls,
+  currentSyncLine,
+}: {
+  content: string;
+  startLine?: number;
+  lineEls?: React.MutableRefObject<Map<number, HTMLDivElement>>;
+  currentSyncLine?: number | null;
+}) {
+  const lines = content.split("\n");
+  return (
+    <div className="source source-mini">
+      {lines.map((line, i) => {
+        const absIdx = startLine + i;
+        const mi = marginIcon(line);
+        return (
+          <div
+            key={i}
+            className={`src-line${currentSyncLine === absIdx ? " sync-current" : ""}`}
+            ref={
+              lineEls
+                ? (el) => {
+                    if (el) lineEls.current.set(absIdx, el as HTMLDivElement);
+                    else lineEls.current.delete(absIdx);
+                  }
+                : undefined
+            }
+          >
+            <div className="ln">{absIdx + 1}</div>
+            <div className={`margin-icon ${mi ? mi.cls : ""}`}>
+              {mi ? mi.label : ""}
+            </div>
+            <div className="src-content">
+              {line ? tokenizeLine(line, i) : <span>&#8203;</span>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function App() {
   const [tweaks, setTweaks] = useState<Tweaks>(loadTweaks);
   const setTweak = <K extends keyof Tweaks>(key: K, value: Tweaks[K]) =>
@@ -135,6 +192,7 @@ function App() {
 
   const [tabs, setTabs] = useState<MdFile[]>(SAMPLE_FILES);
   const [activeId, setActiveId] = useState<string>(SAMPLE_FILES[0].id);
+  const tabsRef = useRef<MdFile[]>(SAMPLE_FILES);
   const [editMode, setEditMode] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("preview");
   const [exportOpen, setExportOpen] = useState(false);
@@ -146,7 +204,16 @@ function App() {
     null,
   );
   const [tweaksOpen, setTweaksOpen] = useState(false);
+  const [sidePanel, setSidePanel] = useState<SidePanel>(null);
+  const [syncLine, setSyncLine] = useState<number | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const readingPaneRef = useRef<HTMLDivElement | null>(null);
+  const sideBodyRef = useRef<HTMLDivElement | null>(null);
+  const blockEls = useRef<
+    Map<number, { el: HTMLDivElement; lineStart: number; lineEnd: number }>
+  >(new Map());
+  const lineEls = useRef<Map<number, HTMLDivElement>>(new Map());
+  const syncingRef = useRef(false);
   const wysiwygHandles = useRef<Map<string, WysiwygEditorHandle | null>>(
     new Map(),
   );
@@ -204,16 +271,30 @@ function App() {
   );
 
   const toggleEditMode = useCallback(() => {
-    if (editMode && sourceVisible) {
-      // Quitter l'édition pendant qu'on est en source : flush + refresh WYSIWYG.
-      const md = sourceRef.current?.getMarkdown();
-      if (md != null) {
-        setTabs((prev) =>
-          prev.map((t) => (t.id === activeId ? { ...t, content: md } : t)),
-        );
-        wysiwygHandles.current.get(activeId)?.refreshFromContent(md);
+    if (editMode) {
+      // Quitter l'édition : flush le contenu vers l'état (pour que ReadPreview soit à jour).
+      if (sourceVisible) {
+        const md = sourceRef.current?.getMarkdown();
+        if (md != null) {
+          setTabs((prev) =>
+            prev.map((t) => (t.id === activeId ? { ...t, content: md } : t)),
+          );
+          wysiwygHandles.current.get(activeId)?.refreshFromContent(md);
+        }
+      } else {
+        const md = wysiwygHandles.current.get(activeId)?.getMarkdown();
+        if (md != null) {
+          setTabs((prev) =>
+            prev.map((t) => (t.id === activeId ? { ...t, content: md } : t)),
+          );
+        }
       }
+    } else {
+      // Activer l'édition : synchronise le WYSIWYG avec le contenu courant.
+      const tab = tabsRef.current.find((t) => t.id === activeId);
+      if (tab) wysiwygHandles.current.get(activeId)?.refreshFromContent(tab.content);
     }
+    setSidePanel(null);
     setEditMode((v) => !v);
   }, [editMode, sourceVisible, activeId]);
 
@@ -240,6 +321,10 @@ function App() {
     window.localStorage.setItem(TWEAKS_STORAGE_KEY, JSON.stringify(tweaks));
   }, [tweaks]);
 
+  useEffect(() => {
+    tabsRef.current = tabs;
+  }, [tabs]);
+
   // File actions
   const handleNew = useCallback(() => {
     const id = "nouveau-" + Date.now();
@@ -252,20 +337,46 @@ function App() {
     setActiveId(id);
   }, []);
 
+  const addOrFocusTab = useCallback((f: OpenedFile) => {
+    const existing = tabsRef.current.find((t) => t.path === f.path);
+    if (existing) {
+      setActiveId(existing.id);
+      return;
+    }
+
+    const id = `file-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const nextTabs = [
+      ...tabsRef.current,
+      { id, name: f.name, content: f.content, path: f.path },
+    ];
+    tabsRef.current = nextTabs;
+    setTabs(nextTabs);
+    setActiveId(id);
+  }, []);
+
   const handleOpen = useCallback(async () => {
     try {
       const f = await openFileDialog();
       if (!f) return;
-      const id = `file-${Date.now()}`;
-      setTabs((prev) => [
-        ...prev,
-        { id, name: f.name, content: f.content, path: f.path },
-      ]);
-      setActiveId(id);
+      addOrFocusTab(f);
     } catch (err) {
       console.error("Ouverture échouée:", err);
     }
-  }, []);
+  }, [addOrFocusTab]);
+
+  useEffect(() => {
+    const unlisten = listen<OpenedFile>("open-file", (event) => {
+      addOrFocusTab(event.payload);
+    });
+
+    emit("frontend-ready").catch((err) =>
+      console.error("Signal frontend-ready échoué:", err),
+    );
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [addOrFocusTab]);
 
   const handleSaveAs = useCallback(async () => {
     const md = getActiveMarkdown();
@@ -392,7 +503,7 @@ function App() {
       if (!containerRect) return;
       setFloatPos({
         x: rect.left + rect.width / 2 - containerRect.left,
-        y: rect.top - containerRect.top + (contentRef.current?.scrollTop || 0),
+        y: rect.top - containerRect.top,
       });
     };
     const onSelChange = () => {
@@ -406,6 +517,127 @@ function App() {
       document.removeEventListener("selectionchange", onSelChange);
     };
   }, [editMode, viewMode, activeId]);
+
+  // Réinitialise le panneau source au changement d'onglet.
+  useEffect(() => {
+    setSidePanel(null);
+    setSyncLine(null);
+    blockEls.current.clear();
+    lineEls.current.clear();
+  }, [activeId]);
+
+  // En mode "source complète", scroll initial vers le bloc cliqué.
+  useEffect(() => {
+    if (sidePanel?.mode !== "full") return;
+    const ln = sidePanel.initialBlock.lineStart;
+    let raf2 = 0;
+    const raf = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        const target = lineEls.current.get(ln);
+        const body = sideBodyRef.current;
+        if (target && body) {
+          syncingRef.current = true;
+          body.scrollTop = target.offsetTop - 16;
+          setSyncLine(ln);
+          setTimeout(() => {
+            syncingRef.current = false;
+          }, 280);
+        }
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf);
+      cancelAnimationFrame(raf2);
+    };
+  }, [sidePanel]);
+
+  // Scroll synchronisé en mode "source complète".
+  useEffect(() => {
+    if (sidePanel?.mode !== "full") return;
+    const reading = readingPaneRef.current;
+    const side = sideBodyRef.current;
+    if (!reading || !side) return;
+
+    const onReadingScroll = () => {
+      if (syncingRef.current) return;
+      const anchor = reading.scrollTop + 40;
+      let bestInfo: {
+        el: HTMLDivElement;
+        lineStart: number;
+        lineEnd: number;
+      } | null = null;
+      let bestDelta = Infinity;
+      blockEls.current.forEach((info) => {
+        const top = info.el.offsetTop;
+        if (top <= anchor) {
+          const delta = anchor - top;
+          if (delta < bestDelta) {
+            bestDelta = delta;
+            bestInfo = info;
+          }
+        }
+      });
+      if (!bestInfo) return;
+      const bi = bestInfo as { el: HTMLDivElement; lineStart: number; lineEnd: number };
+      const blockHeight = bi.el.offsetHeight || 1;
+      const progress = Math.min(
+        1,
+        Math.max(0, (anchor - bi.el.offsetTop) / blockHeight),
+      );
+      const targetLn =
+        bi.lineStart + Math.round(progress * (bi.lineEnd - bi.lineStart));
+      const targetEl = lineEls.current.get(targetLn);
+      if (!targetEl) return;
+      syncingRef.current = true;
+      side.scrollTop = targetEl.offsetTop - 16;
+      setSyncLine(bi.lineStart);
+      requestAnimationFrame(() => {
+        syncingRef.current = false;
+      });
+    };
+
+    const onSideScroll = () => {
+      if (syncingRef.current) return;
+      const anchor = side.scrollTop + 16;
+      let bestLn: number | null = null;
+      let bestDelta = Infinity;
+      lineEls.current.forEach((el, idx) => {
+        const top = el.offsetTop;
+        if (top <= anchor) {
+          const delta = anchor - top;
+          if (delta < bestDelta) {
+            bestDelta = delta;
+            bestLn = idx;
+          }
+        }
+      });
+      if (bestLn == null) return;
+      let bestBlock: {
+        el: HTMLDivElement;
+        lineStart: number;
+        lineEnd: number;
+      } | null = null;
+      blockEls.current.forEach((info) => {
+        if (info.lineStart <= bestLn! && bestLn! <= info.lineEnd)
+          bestBlock = info;
+      });
+      if (!bestBlock) return;
+      const bb = bestBlock as { el: HTMLDivElement; lineStart: number; lineEnd: number };
+      syncingRef.current = true;
+      reading.scrollTop = bb.el.offsetTop - 24;
+      setSyncLine(bb.lineStart);
+      requestAnimationFrame(() => {
+        syncingRef.current = false;
+      });
+    };
+
+    reading.addEventListener("scroll", onReadingScroll, { passive: true });
+    side.addEventListener("scroll", onSideScroll, { passive: true });
+    return () => {
+      reading.removeEventListener("scroll", onReadingScroll);
+      side.removeEventListener("scroll", onSideScroll);
+    };
+  }, [sidePanel]);
 
   const closeTab = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -564,7 +796,7 @@ function App() {
         )}
 
         {!active ? (
-          <div className="welcome">
+          <div className="welcome" style={{ flex: 1 }}>
             <h1>Aucun document ouvert</h1>
             <p>Glissez un fichier .md ici, ou créez-en un nouveau.</p>
             <div className="kbds">
@@ -580,46 +812,127 @@ function App() {
               </span>
             </div>
           </div>
+        ) : sourceVisible ? (
+          <div style={{ flex: 1, overflow: "auto" }}>
+            <SourceView
+              ref={sourceRef}
+              content={active.content}
+              search={searchQ}
+              currentHit={currentHit}
+              onInput={() => markDirty(active.id)}
+            />
+          </div>
         ) : (
           <>
-            {/* Tous les WysiwygEditor restent montés : préserve les modifs au switch d'onglet */}
-            {tabs.map((tab) => {
-              const isActive = tab.id === activeId;
-              const wysiwygVisible = isActive && !sourceVisible;
-              return (
-                <div
-                  key={tab.id}
-                  style={{
-                    display: wysiwygVisible ? "block" : "none",
-                    height: "100%",
-                  }}
-                >
-                  <WysiwygEditor
-                    ref={(h) => {
-                      if (h) wysiwygHandles.current.set(tab.id, h);
-                      else wysiwygHandles.current.delete(tab.id);
+            {/* Volet lecture + éditeur WYSIWYG */}
+            <div className="reading-pane" ref={readingPaneRef}>
+              {/* Tous les WysiwygEditor restent montés (modifs préservées au switch d'onglet) */}
+              {tabs.map((tab) => {
+                const isActive = tab.id === activeId;
+                const editorVisible = isActive && editMode;
+                return (
+                  <div
+                    key={tab.id}
+                    style={{
+                      display: editorVisible ? "block" : "none",
+                      height: "100%",
                     }}
-                    initialContent={tab.content}
-                    enabled={editMode && isActive}
-                    onInput={() => markDirty(tab.id)}
-                  />
-                </div>
-              );
-            })}
-            {sourceVisible && (
-              <SourceView
-                ref={sourceRef}
-                content={active.content}
-                search={searchQ}
-                currentHit={currentHit}
-                onInput={() => markDirty(active.id)}
-              />
-            )}
-          </>
-        )}
+                  >
+                    <WysiwygEditor
+                      ref={(h) => {
+                        if (h) wysiwygHandles.current.set(tab.id, h);
+                        else wysiwygHandles.current.delete(tab.id);
+                      }}
+                      initialContent={tab.content}
+                      enabled={editMode && isActive}
+                      onInput={() => markDirty(tab.id)}
+                    />
+                  </div>
+                );
+              })}
 
-        {editMode && viewMode === "preview" && (
-          <FloatingToolbar pos={floatPos} onAction={handleAction} />
+              {/* Prévisualisation lecture avec boutons de bloc */}
+              {!editMode && (
+                <div className="reading">
+                  {renderMarkdownBlocks(active.content, {
+                    onInspect: (b) => setSidePanel({ mode: "block", block: b }),
+                    onOpenFull: (b) =>
+                      setSidePanel({ mode: "full", initialBlock: b }),
+                    selectedBlockKey:
+                      sidePanel?.mode === "block" ? sidePanel.block.key : null,
+                    inspectMode: sidePanel?.mode ?? null,
+                    blockEls,
+                  })}
+                </div>
+              )}
+
+              {editMode && viewMode === "preview" && (
+                <FloatingToolbar pos={floatPos} onAction={handleAction} />
+              )}
+            </div>
+
+            {/* Panneau source latéral */}
+            <div className={`side-source ${sidePanel ? "open" : ""}`}>
+              {sidePanel && (
+                <div className="side-source-inner">
+                  <div className="side-head">
+                    <span className="side-title">
+                      {sidePanel.mode === "block" ? "Source" : "Source complète"}
+                    </span>
+                    {sidePanel.mode === "block" ? (
+                      <>
+                        <span className="side-kind">{sidePanel.block.kind}</span>
+                        <span className="side-kind">
+                          {`L${sidePanel.block.lineStart + 1}${sidePanel.block.lineEnd > sidePanel.block.lineStart ? `–${sidePanel.block.lineEnd + 1}` : ""}`}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="pill-sync">
+                        <span className="live-dot" />
+                        Sync
+                      </span>
+                    )}
+                    <span className="side-spacer" />
+                    <button
+                      className="icon-btn"
+                      title="Copier"
+                      onClick={() =>
+                        navigator.clipboard?.writeText(
+                          sidePanel.mode === "block"
+                            ? sidePanel.block.sourceLines.join("\n")
+                            : active.content,
+                        )
+                      }
+                    >
+                      <Icon.Copy />
+                    </button>
+                    <button
+                      className="icon-btn"
+                      title="Fermer"
+                      onClick={() => setSidePanel(null)}
+                    >
+                      <Icon.Close />
+                    </button>
+                  </div>
+                  <div className="side-body" ref={sideBodyRef}>
+                    {sidePanel.mode === "block" ? (
+                      <SourceMini
+                        content={sidePanel.block.sourceLines.join("\n")}
+                        startLine={sidePanel.block.lineStart}
+                      />
+                    ) : (
+                      <SourceMini
+                        content={active.content}
+                        startLine={0}
+                        lineEls={lineEls}
+                        currentSyncLine={syncLine}
+                      />
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </>
         )}
       </div>
 

@@ -29,6 +29,11 @@ td.addRule("math", {
   },
 });
 
+td.addRule("horizontalRule", {
+  filter: "hr",
+  replacement: () => "\n\n---\n\n",
+});
+
 // Tâches : <li><input type="checkbox" checked> texte</li> → "- [x] texte"
 td.addRule("taskListItem", {
   filter: (node) => {
