@@ -991,7 +991,7 @@ function App() {
                       onInput={() => markDirty(tab.id)}
                     />
                     {isActive && editMode && viewMode === "preview" && active && (
-                      <div className="reading reading-blocks-overlay" aria-hidden="true">
+                      <div className="reading reading-blocks reading-blocks-overlay" aria-hidden="true">
                         {renderMarkdownBlocks(active.content, {
                           onInspect: (b) =>
                             setSidePanel((prev) =>
@@ -1019,7 +1019,7 @@ function App() {
 
               {/* Prévisualisation lecture avec boutons de bloc */}
               {!editMode && (
-                <div className="reading">
+                <div className="reading reading-blocks">
                   {renderMarkdownBlocks(active.content, {
                     onInspect: (b) =>
                       setSidePanel((prev) =>

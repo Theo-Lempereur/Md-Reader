@@ -743,25 +743,53 @@ button {
 .md-block {
   position: relative;
   padding: 1px 0;
+  transition: background 140ms;
+}
+.md-block-inner {
+  position: relative;
   border-radius: var(--radius-sm);
   transition: background 140ms;
 }
-.md-block.selected {
+/* En mode "blocs pleine largeur" (lecture & overlay) : la zone hover couvre tout le volet,
+   tandis que le contenu reste centré dans .md-block-inner avec sa propre largeur. */
+.reading-blocks {
+  max-width: none;
+  padding-left: 0;
+  padding-right: 0;
+}
+.reading-blocks .md-block {
+  display: flex;
+  justify-content: center;
+}
+.reading-blocks .md-block-inner {
+  width: 100%;
+  max-width: var(--reading-width, 760px);
+  padding: 0 var(--reading-pad-x, 48px);
+  box-sizing: border-box;
+}
+/* Sélection (mode "source bloc") — fond subtil sur le bloc cliqué. */
+.md-block.selected .md-block-inner {
   background: var(--accent-soft);
-  box-shadow: -8px 0 0 var(--accent-soft), 8px 0 0 var(--accent-soft);
 }
 /* Bloc surligné après un saut (depuis preview ou source) — repère persistant. */
-.md-block.jump-highlight {
+.md-block.jump-highlight .md-block-inner {
   background: var(--accent-soft);
-  box-shadow:
-    -8px 0 0 var(--accent-soft),
-    8px 0 0 var(--accent-soft),
-    inset 2px 0 0 var(--accent);
+}
+.md-block.jump-highlight .md-block-inner::before {
+  content: "";
+  position: absolute;
+  left: max(4px, calc(var(--reading-pad-x, 48px) - 16px));
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  pointer-events: none;
 }
 .md-block-tools {
   position: absolute;
   top: -6px;
-  right: calc(var(--reading-pad-x, 48px) * -1.1);
+  right: calc(var(--reading-pad-x, 48px) * -0.1);
   display: flex;
   gap: 3px;
   align-items: flex-start;
@@ -817,7 +845,7 @@ button {
   pointer-events: none;
   z-index: 2;
 }
-.reading-blocks-overlay .md-block > *:not(.md-block-tools) {
+.reading-blocks-overlay .md-block-inner > *:not(.md-block-tools) {
   visibility: hidden;
 }
 .reading-blocks-overlay .md-block-tools {

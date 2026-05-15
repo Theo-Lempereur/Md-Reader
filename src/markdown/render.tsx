@@ -637,30 +637,32 @@ export function renderMarkdownBlocks(
           else opts.blockEls.current.delete(idx);
         }}
       >
-        {jsx}
-        <div className="md-block-tools">
-          <button
-            className={`md-block-btn${isBlockSel ? " active" : ""}`}
-            title={`Source du bloc — ${b.kind}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              opts.onInspect(info);
-            }}
-            onMouseDown={(e) => e.preventDefault()}
-          >
-            <Icon.Code />
-          </button>
-          <button
-            className={`md-block-btn${isFull ? " active" : ""}`}
-            title="Source complète synchronisée"
-            onClick={(e) => {
-              e.stopPropagation();
-              opts.onOpenFull(info);
-            }}
-            onMouseDown={(e) => e.preventDefault()}
-          >
-            <Icon.PanelRight />
-          </button>
+        <div className="md-block-inner">
+          {jsx}
+          <div className="md-block-tools">
+            <button
+              className={`md-block-btn${isBlockSel ? " active" : ""}`}
+              title={`Source du bloc — ${b.kind}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                opts.onInspect(info);
+              }}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <Icon.Code />
+            </button>
+            <button
+              className={`md-block-btn${isFull ? " active" : ""}`}
+              title="Source complète synchronisée"
+              onClick={(e) => {
+                e.stopPropagation();
+                opts.onOpenFull(info);
+              }}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <Icon.PanelRight />
+            </button>
+          </div>
         </div>
       </div>
     );
