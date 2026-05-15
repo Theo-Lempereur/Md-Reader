@@ -15,6 +15,7 @@ import {
   readTime,
   wordCount,
   renderMarkdownBlocks,
+  parseBlockBounds,
   type BlockInfo,
 } from "./markdown/render";
 import { normalizeMarkdown } from "./markdown/normalize";
@@ -70,6 +71,7 @@ const DEFAULT_TWEAKS: Tweaks = {
   toolbarPos: "floating",
   autoSave: false,
   textWidth: 60,
+  syncScroll: true,
 };
 
 const TEXT_WIDTH_MIN = 30;
@@ -133,6 +135,8 @@ function loadTweaks(): Tweaks {
         s.textWidth <= TEXT_WIDTH_MAX
           ? s.textWidth
           : DEFAULT_TWEAKS.textWidth,
+      syncScroll:
+        typeof s.syncScroll === "boolean" ? s.syncScroll : DEFAULT_TWEAKS.syncScroll,
     };
   } catch {
     return DEFAULT_TWEAKS;
@@ -145,19 +149,32 @@ function clampTextWidth(value: number): number {
 
 type SidePanel =
   | { mode: "block"; block: BlockInfo }
-  | { mode: "full"; initialBlock: BlockInfo }
+  | { mode: "full"; initialBlock: BlockInfo; nonce: number }
   | null;
+
+function centerOnEl(container: HTMLElement, el: HTMLElement) {
+  container.scrollTop =
+    el.offsetTop - container.clientHeight / 2 + el.offsetHeight / 2;
+}
 
 function SourceMini({
   content,
   startLine = 0,
   lineEls,
   currentSyncLine,
+  lineToBlock,
+  highlightedBlock,
+  onJumpToBlock,
 }: {
   content: string;
   startLine?: number;
   lineEls?: React.MutableRefObject<Map<number, HTMLDivElement>>;
   currentSyncLine?: number | null;
+  /** Map ligne → blockKey, pour afficher le bouton de saut sur n'importe quelle ligne du bloc. */
+  lineToBlock?: Map<number, number>;
+  /** Bloc actuellement surligné (toutes ses lignes prennent la classe `jump-highlight`). */
+  highlightedBlock?: number | null;
+  onJumpToBlock?: (blockKey: number) => void;
 }) {
   const lines = normalizeMarkdown(content).split("\n");
   return (
@@ -165,10 +182,14 @@ function SourceMini({
       {lines.map((line, i) => {
         const absIdx = startLine + i;
         const mi = marginIcon(line);
+        const blockKey = lineToBlock?.get(absIdx);
+        const hasJump = blockKey != null && !!onJumpToBlock;
+        const isHighlighted =
+          blockKey != null && highlightedBlock != null && blockKey === highlightedBlock;
         return (
           <div
             key={i}
-            className={`src-line${currentSyncLine === absIdx ? " sync-current" : ""}`}
+            className={`src-line${currentSyncLine === absIdx ? " sync-current" : ""}${hasJump ? " src-line-has-jump" : ""}${isHighlighted ? " jump-highlight" : ""}`}
             ref={
               lineEls
                 ? (el) => {
@@ -185,6 +206,22 @@ function SourceMini({
             <div className="src-content">
               {line ? tokenizeLine(line, i) : <span>&#8203;</span>}
             </div>
+            {hasJump && (
+              <div className="src-line-tools">
+                <button
+                  type="button"
+                  className="src-line-btn"
+                  title="Aligner la preview sur ce bloc"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onJumpToBlock!(blockKey!);
+                  }}
+                >
+                  <Icon.PanelLeft />
+                </button>
+              </div>
+            )}
           </div>
         );
       })}
@@ -220,6 +257,9 @@ function App() {
   const [tweaksOpen, setTweaksOpen] = useState(false);
   const [sidePanel, setSidePanel] = useState<SidePanel>(null);
   const [syncLine, setSyncLine] = useState<number | null>(null);
+  // Bloc surligné des deux côtés (preview + source) pour ne pas le perdre de vue
+  // après le re-centrage automatique. Persiste jusqu'au prochain clic ou changement d'onglet.
+  const [highlightedBlock, setHighlightedBlock] = useState<number | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const readingPaneRef = useRef<HTMLDivElement | null>(null);
   const sideBodyRef = useRef<HTMLDivElement | null>(null);
@@ -236,6 +276,17 @@ function App() {
 
   const active = tabs.find((t) => t.id === activeId) || tabs[0];
   const sourceVisible = !!active && editMode && viewMode === "source";
+
+  const sidePanelMode = sidePanel?.mode ?? null;
+  // Map ligne → blockKey pour TOUTES les lignes de chaque bloc, pas seulement le début.
+  const fullSourceLineToBlock = useMemo(() => {
+    if (sidePanelMode !== "full" || !active) return undefined;
+    const map = new Map<number, number>();
+    parseBlockBounds(active.content).forEach((b, idx) => {
+      for (let ln = b.lineStart; ln <= b.lineEnd; ln++) map.set(ln, idx);
+    });
+    return map;
+  }, [sidePanelMode, active?.content]);
 
   const getActiveMarkdown = useCallback((): string | null => {
     if (sourceVisible) return sourceRef.current?.getMarkdown() ?? null;
@@ -317,6 +368,7 @@ function App() {
           ?.refreshFromContent(normalizeMarkdown(tab.content));
     }
     setSidePanel(null);
+    setHighlightedBlock(null);
     setEditMode((v) => !v);
   }, [editMode, sourceVisible, activeId]);
 
@@ -586,27 +638,34 @@ function App() {
   useEffect(() => {
     setSidePanel(null);
     setSyncLine(null);
+    setHighlightedBlock(null);
     blockEls.current.clear();
     lineEls.current.clear();
   }, [activeId]);
 
   // En mode "source complète", scroll initial vers le bloc cliqué.
+  // Centre la preview ET la source sur ce bloc (réagit aussi au nonce
+  // → re-clic sur le bouton PanelRight = re-centrage).
   useEffect(() => {
     if (sidePanel?.mode !== "full") return;
     const ln = sidePanel.initialBlock.lineStart;
+    const key = sidePanel.initialBlock.key;
     let raf2 = 0;
     const raf = requestAnimationFrame(() => {
       raf2 = requestAnimationFrame(() => {
         const target = lineEls.current.get(ln);
         const body = sideBodyRef.current;
-        if (target && body) {
-          syncingRef.current = true;
-          body.scrollTop = target.offsetTop - 16;
-          setSyncLine(ln);
-          setTimeout(() => {
-            syncingRef.current = false;
-          }, 280);
-        }
+        const reading = readingPaneRef.current;
+        const blockInfo = blockEls.current.get(key);
+        if (!body) return;
+        syncingRef.current = true;
+        if (target) centerOnEl(body, target);
+        if (reading && blockInfo) centerOnEl(reading, blockInfo.el);
+        setSyncLine(ln);
+        setHighlightedBlock(key);
+        setTimeout(() => {
+          syncingRef.current = false;
+        }, 280);
       });
     });
     return () => {
@@ -616,15 +675,17 @@ function App() {
   }, [sidePanel]);
 
   // Scroll synchronisé en mode "source complète".
+  // Désactivable via le tweak `syncScroll`.
   useEffect(() => {
     if (sidePanel?.mode !== "full") return;
+    if (!tweaks.syncScroll) return;
     const reading = readingPaneRef.current;
     const side = sideBodyRef.current;
     if (!reading || !side) return;
 
     const onReadingScroll = () => {
       if (syncingRef.current) return;
-      const anchor = reading.scrollTop + 40;
+      const anchor = reading.scrollTop + reading.clientHeight / 2;
       let bestInfo: {
         el: HTMLDivElement;
         lineStart: number;
@@ -653,7 +714,7 @@ function App() {
       const targetEl = lineEls.current.get(targetLn);
       if (!targetEl) return;
       syncingRef.current = true;
-      side.scrollTop = targetEl.offsetTop - 16;
+      centerOnEl(side, targetEl);
       setSyncLine(bi.lineStart);
       requestAnimationFrame(() => {
         syncingRef.current = false;
@@ -662,7 +723,7 @@ function App() {
 
     const onSideScroll = () => {
       if (syncingRef.current) return;
-      const anchor = side.scrollTop + 16;
+      const anchor = side.scrollTop + side.clientHeight / 2;
       let bestLn: number | null = null;
       let bestDelta = Infinity;
       lineEls.current.forEach((el, idx) => {
@@ -688,7 +749,7 @@ function App() {
       if (!bestBlock) return;
       const bb = bestBlock as { el: HTMLDivElement; lineStart: number; lineEnd: number };
       syncingRef.current = true;
-      reading.scrollTop = bb.el.offsetTop - 24;
+      centerOnEl(reading, bb.el);
       setSyncLine(bb.lineStart);
       requestAnimationFrame(() => {
         syncingRef.current = false;
@@ -701,7 +762,24 @@ function App() {
       reading.removeEventListener("scroll", onReadingScroll);
       side.removeEventListener("scroll", onSideScroll);
     };
-  }, [sidePanel]);
+  }, [sidePanel, tweaks.syncScroll]);
+
+  // Centre la preview ET la source sur un bloc donné (depuis un bouton côté source).
+  const jumpToBlock = useCallback((blockKey: number) => {
+    const reading = readingPaneRef.current;
+    const side = sideBodyRef.current;
+    const blockInfo = blockEls.current.get(blockKey);
+    if (!blockInfo) return;
+    const lineEl = lineEls.current.get(blockInfo.lineStart);
+    syncingRef.current = true;
+    if (reading) centerOnEl(reading, blockInfo.el);
+    if (side && lineEl) centerOnEl(side, lineEl);
+    setSyncLine(blockInfo.lineStart);
+    setHighlightedBlock(blockKey);
+    setTimeout(() => {
+      syncingRef.current = false;
+    }, 280);
+  }, []);
 
   const closeTab = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -922,12 +1000,15 @@ function App() {
                                 : { mode: "block", block: b },
                             ),
                           onOpenFull: (b) =>
-                            setSidePanel((prev) =>
-                              prev?.mode === "full" ? null : { mode: "full", initialBlock: b },
-                            ),
+                            setSidePanel({
+                              mode: "full",
+                              initialBlock: b,
+                              nonce: Date.now(),
+                            }),
                           selectedBlockKey:
                             sidePanel?.mode === "block" ? sidePanel.block.key : null,
                           inspectMode: sidePanel?.mode ?? null,
+                          highlightedBlockKey: highlightedBlock,
                           blockEls,
                         })}
                       </div>
@@ -947,12 +1028,15 @@ function App() {
                           : { mode: "block", block: b },
                       ),
                     onOpenFull: (b) =>
-                      setSidePanel((prev) =>
-                        prev?.mode === "full" ? null : { mode: "full", initialBlock: b },
-                      ),
+                      setSidePanel({
+                        mode: "full",
+                        initialBlock: b,
+                        nonce: Date.now(),
+                      }),
                     selectedBlockKey:
                       sidePanel?.mode === "block" ? sidePanel.block.key : null,
                     inspectMode: sidePanel?.mode ?? null,
+                    highlightedBlockKey: highlightedBlock,
                     blockEls,
                   })}
                 </div>
@@ -1001,7 +1085,10 @@ function App() {
                     <button
                       className="icon-btn"
                       title="Fermer"
-                      onClick={() => setSidePanel(null)}
+                      onClick={() => {
+                        setSidePanel(null);
+                        setHighlightedBlock(null);
+                      }}
                     >
                       <Icon.Close />
                     </button>
@@ -1018,6 +1105,9 @@ function App() {
                         startLine={0}
                         lineEls={lineEls}
                         currentSyncLine={syncLine}
+                        lineToBlock={fullSourceLineToBlock}
+                        highlightedBlock={highlightedBlock}
+                        onJumpToBlock={jumpToBlock}
                       />
                     )}
                   </div>
@@ -1123,6 +1213,13 @@ function App() {
           step={1}
           unit="%"
           onChange={(v) => setTweak("textWidth", v)}
+        />
+
+        <TweakSection label="Source" />
+        <TweakToggle
+          label="Scroll synchronisé"
+          value={tweaks.syncScroll}
+          onChange={(v) => setTweak("syncScroll", v)}
         />
 
         <TweakSection label="Fichier" />

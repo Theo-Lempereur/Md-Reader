@@ -750,6 +750,14 @@ button {
   background: var(--accent-soft);
   box-shadow: -8px 0 0 var(--accent-soft), 8px 0 0 var(--accent-soft);
 }
+/* Bloc surligné après un saut (depuis preview ou source) — repère persistant. */
+.md-block.jump-highlight {
+  background: var(--accent-soft);
+  box-shadow:
+    -8px 0 0 var(--accent-soft),
+    8px 0 0 var(--accent-soft),
+    inset 2px 0 0 var(--accent);
+}
 .md-block-tools {
   position: absolute;
   top: -6px;
@@ -880,7 +888,8 @@ button {
 }
 .source-mini {
   max-width: 100%;
-  padding: 18px 14px 32px;
+  /* padding-left élargi pour héberger le bouton "jump-to-preview" dans la gouttière. */
+  padding: 18px 14px 32px 32px;
   margin: 0;
 }
 .source-mini .src-line {
@@ -892,6 +901,14 @@ button {
   background: var(--accent-soft);
 }
 .src-line.sync-current:hover {
+  background: var(--accent-soft);
+}
+/* Toutes les lignes du bloc surligné (saut depuis preview ou source). */
+.src-line.jump-highlight {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.src-line.jump-highlight:hover {
   background: var(--accent-soft);
 }
 
@@ -1218,6 +1235,7 @@ button {
   user-select: text;
 }
 .src-line {
+  position: relative;
   display: grid;
   grid-template-columns: 36px 28px 1fr;
   align-items: start;
@@ -1225,6 +1243,51 @@ button {
   padding: 0 6px;
   transition: background 100ms;
   min-height: 1.75em;
+}
+.src-line-tools {
+  position: absolute;
+  top: 50%;
+  /* Dans la gouttière à gauche du numéro de ligne (padding-left de .source-mini). */
+  left: -26px;
+  /* Largeur incluant un pont transparent vers la ligne pour éviter
+     que le hover ne s'interrompe quand la souris traverse l'espace vide. */
+  width: 32px;
+  height: 26px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  opacity: 0;
+  transition: opacity 140ms;
+  pointer-events: none;
+}
+.src-line.src-line-has-jump:hover .src-line-tools,
+.src-line-tools:hover {
+  opacity: 1;
+  pointer-events: auto;
+}
+.src-line-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: color 120ms, border-color 120ms, background 120ms, box-shadow 120ms;
+}
+.src-line-btn:hover {
+  color: var(--accent);
+  border-color: var(--line-strong);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+.src-line-btn svg {
+  width: 12px;
+  height: 12px;
 }
 .src-line:hover {
   background: var(--accent-soft);

@@ -26,6 +26,8 @@ export type Tweaks = {
   autoSave: boolean;
   /** Largeur de la zone de texte, en pourcentage de la largeur visible. */
   textWidth: number;
+  /** Synchronisation du scroll entre la preview et la source latérale. */
+  syncScroll: boolean;
 };
 
 export type SearchHit = {

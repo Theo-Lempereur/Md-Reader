@@ -15,6 +15,8 @@ export type BlockRenderOpts = {
   onOpenFull: (block: BlockInfo) => void;
   selectedBlockKey: number | null;
   inspectMode: "block" | "full" | null;
+  /** Bloc surligné des deux côtés (preview + source) après un saut. */
+  highlightedBlockKey?: number | null;
   blockEls: React.MutableRefObject<
     Map<number, { el: HTMLDivElement; lineStart: number; lineEnd: number }>
   >;
@@ -500,9 +502,9 @@ export function readTime(t: string): number {
 
 // ── Block position tracking (for renderMarkdownBlocks) ──────────────────────
 
-type BlockBounds = { lineStart: number; lineEnd: number; kind: string };
+export type BlockBounds = { lineStart: number; lineEnd: number; kind: string };
 
-function parseBlockBounds(md: string): BlockBounds[] {
+export function parseBlockBounds(md: string): BlockBounds[] {
   const lines = md.split("\n");
   const bounds: BlockBounds[] = [];
   let i = 0;
@@ -619,11 +621,12 @@ export function renderMarkdownBlocks(
     const isBlockSel =
       opts.selectedBlockKey === idx && opts.inspectMode === "block";
     const isFull = opts.inspectMode === "full";
+    const isHighlighted = opts.highlightedBlockKey === idx;
 
     return (
       <div
         key={idx}
-        className={`md-block${isBlockSel ? " selected" : ""}`}
+        className={`md-block${isBlockSel ? " selected" : ""}${isHighlighted ? " jump-highlight" : ""}`}
         ref={(el) => {
           if (el)
             opts.blockEls.current.set(idx, {
