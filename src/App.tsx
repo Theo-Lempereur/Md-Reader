@@ -594,17 +594,38 @@ function App() {
         setSearchOpen(false);
         setExportOpen(false);
         setFileMenuOpen(false);
-      } else if (mod && key === "e") {
+      } else if (mod && key === "m") {
         e.preventDefault();
         toggleEditMode();
       } else if (mod && key === "p") {
         e.preventDefault();
         window.print();
+      } else if (e.altKey && !mod && !e.shiftKey && key === "p") {
+        if (sidePanel) {
+          e.preventDefault();
+          setSidePanel(null);
+          setHighlightedBlock(null);
+        }
+      } else if (e.altKey && !mod && !e.shiftKey && key === "s") {
+        if (editMode) {
+          e.preventDefault();
+          switchViewMode(viewMode === "source" ? "preview" : "source");
+        }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [handleSave, handleSaveAs, handleOpen, handleNew, toggleEditMode]);
+  }, [
+    handleSave,
+    handleSaveAs,
+    handleOpen,
+    handleNew,
+    toggleEditMode,
+    sidePanel,
+    editMode,
+    viewMode,
+    switchViewMode,
+  ]);
 
   // Selection toolbar (WYSIWYG preview + edit mode)
   useEffect(() => {
@@ -907,6 +928,7 @@ function App() {
           <button
             className={`edit-toggle ${editMode ? "on" : ""}`}
             onClick={toggleEditMode}
+            title={editMode ? "Lecture (Ctrl+M)" : "Modification (Ctrl+M)"}
           >
             {editMode ? (
               <>

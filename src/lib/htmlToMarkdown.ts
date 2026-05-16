@@ -19,15 +19,30 @@ td.addRule("strikethrough", {
 td.addRule("math", {
   filter: (node) =>
     node.nodeType === 1 &&
-    (node as HTMLElement).hasAttribute("data-tex") &&
     ((node as HTMLElement).classList.contains("math-inline") ||
-      (node as HTMLElement).classList.contains("math-block")),
+      (node as HTMLElement).classList.contains("math-block") ||
+      (node as HTMLElement).classList.contains("math-edit")),
   replacement: (_content, node) => {
     const el = node as HTMLElement;
-    const tex = el.getAttribute("data-tex") ?? "";
+    // Pour un bloc en cours d'édition (.math-edit), on lit le textContent
+    // directement (le source TeX brut). Pour un bloc rendu KaTeX, on lit
+    // l'attribut `data-tex` figé lors de la dernière fermeture.
+    const tex = el.classList.contains("math-edit")
+      ? (el.textContent ?? "").replace(/​/g, "")
+      : (el.getAttribute("data-tex") ?? "");
     const display = el.getAttribute("data-display") === "true";
     return display ? `\n\n$$\n${tex}\n$$\n\n` : `$${tex}$`;
   },
+});
+
+// Le wrapper .math-edit-wrap autour d'un span d'édition display ne doit pas
+// produire de markdown supplémentaire — on laisse turndown descendre dans
+// son enfant .math-edit (la règle math au-dessus s'en charge).
+td.addRule("mathEditWrap", {
+  filter: (node) =>
+    node.nodeType === 1 &&
+    (node as HTMLElement).classList.contains("math-edit-wrap"),
+  replacement: (content) => content,
 });
 
 td.addRule("horizontalRule", {

@@ -8,6 +8,7 @@ import {
   runMappedCommand,
   type SlashCtx,
 } from "./runners";
+import { enterMathEdit } from "./math";
 
 export type SlashGroup = "format" | "block" | "table" | "math";
 
@@ -140,6 +141,24 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     hint: "retire titre / liste / format",
     group: "block",
     run: clearBlockFormat,
+  },
+
+  // ---------------- Math (entrée dans le mode édition) ----------------
+  {
+    id: "math",
+    names: ["math", "inline", "formule"],
+    label: "Formule (inline)",
+    hint: "$…$",
+    group: "math",
+    run: (ctx) => enterMathEdit(ctx, false),
+  },
+  {
+    id: "equation",
+    names: ["equation", "eq", "display", "maths"],
+    label: "Équation (display)",
+    hint: "$$…$$",
+    group: "math",
+    run: (ctx) => enterMathEdit(ctx, true),
   },
 
   // ---------------- Tableau ----------------

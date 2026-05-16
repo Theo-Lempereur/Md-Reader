@@ -12,7 +12,19 @@ import {
   SLASH_COMMANDS,
   type SlashCommand,
 } from "./commands";
-import { clearTriggerText, insertTable, type SlashCtx } from "./runners";
+import {
+  commitActiveMathEdit,
+  handleMathTab,
+  isInsideMathEdit,
+  SLASH_MATH_COMMANDS,
+} from "./math";
+import {
+  addTableRow,
+  clearTriggerText,
+  getCurrentTableCell,
+  insertTable,
+  type SlashCtx,
+} from "./runners";
 
 type Anchor = { x: number; y: number };
 
@@ -77,6 +89,10 @@ function shouldTrigger(editor: HTMLElement): boolean {
       : range.startContainer.parentElement;
   if (startEl?.closest("pre, code")) return false;
 
+  // Dans un bloc math en édition, le `/` peut apparaître après `{`, `\`, etc.
+  // On autorise sans la règle « préfixé par un espace ».
+  if (startEl?.closest(".math-edit")) return true;
+
   const node = range.startContainer;
   const offset = range.startOffset;
   if (node.nodeType === 3) {
@@ -97,6 +113,165 @@ function shouldTrigger(editor: HTMLElement): boolean {
   }
   // Block-level voisin : on autorise.
   return true;
+}
+
+/** Place le caret au début (collapse:start) du contenu de `el`. */
+function placeCaretAtStart(el: HTMLElement) {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+/** Place le caret à la fin (collapse:end) du contenu de `el`. */
+function placeCaretAtEnd(el: HTMLElement) {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+/** Bloc top-level (enfant direct de l'éditeur) contenant le caret. */
+function getCurrentTopBlock(editor: HTMLElement): HTMLElement | null {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return null;
+  const node = sel.getRangeAt(0).startContainer;
+  if (!editor.contains(node)) return null;
+  let cur: Node | null = node;
+  while (cur && cur.parentNode !== editor) {
+    cur = cur.parentNode;
+  }
+  return cur instanceof HTMLElement ? cur : null;
+}
+
+/** Place le caret au début du bloc suivant ; si absent, crée un <p> vide. */
+function moveCaretToNextBlock(editor: HTMLElement): { created: boolean } | null {
+  const block = getCurrentTopBlock(editor);
+  if (!block) return null;
+  const next = block.nextElementSibling;
+  if (next instanceof HTMLElement) {
+    placeCaretAtStart(next);
+    return { created: false };
+  }
+  const p = document.createElement("p");
+  p.appendChild(document.createElement("br"));
+  editor.appendChild(p);
+  placeCaretAtStart(p);
+  return { created: true };
+}
+
+/** Place le caret en fin de bloc/cellule courant. */
+function moveCaretToBlockEnd(editor: HTMLElement): boolean {
+  const cell = getCurrentTableCell(editor);
+  if (cell) {
+    placeCaretAtEnd(cell);
+    return true;
+  }
+  const block = getCurrentTopBlock(editor);
+  if (!block) return false;
+  placeCaretAtEnd(block);
+  return true;
+}
+
+/** Tab dans un tableau : cellule suivante, ou sortie du tableau. */
+function moveToNextCell(
+  cell: HTMLTableCellElement,
+): { exited: boolean } {
+  const nextCell = cell.nextElementSibling;
+  if (nextCell instanceof HTMLTableCellElement) {
+    placeCaretAtStart(nextCell);
+    return { exited: false };
+  }
+  const row = cell.parentElement;
+  const nextRow = row?.nextElementSibling;
+  if (nextRow instanceof HTMLTableRowElement && nextRow.cells.length > 0) {
+    placeCaretAtStart(nextRow.cells[0]);
+    return { exited: false };
+  }
+  // Dernière cellule de la dernière ligne du tbody : essaie d'aller au tbody
+  // suivant (peu fréquent) puis sort du tableau.
+  const tbody = row?.parentElement;
+  const nextSection = tbody?.nextElementSibling;
+  if (nextSection) {
+    const firstCell = nextSection.querySelector<HTMLTableCellElement>("td, th");
+    if (firstCell) {
+      placeCaretAtStart(firstCell);
+      return { exited: false };
+    }
+  }
+  // Sortie : créer un <p> juste après le <table>.
+  const table = cell.closest("table");
+  if (!table || !table.parentNode) return { exited: true };
+  const p = document.createElement("p");
+  p.appendChild(document.createElement("br"));
+  table.parentNode.insertBefore(p, table.nextSibling);
+  placeCaretAtStart(p);
+  return { exited: true };
+}
+
+/** Shift+Tab dans un tableau : cellule précédente. */
+function moveToPrevCell(cell: HTMLTableCellElement): boolean {
+  const prev = cell.previousElementSibling;
+  if (prev instanceof HTMLTableCellElement) {
+    placeCaretAtEnd(prev);
+    return true;
+  }
+  const row = cell.parentElement;
+  const prevRow = row?.previousElementSibling;
+  if (prevRow instanceof HTMLTableRowElement && prevRow.cells.length > 0) {
+    placeCaretAtEnd(prevRow.cells[prevRow.cells.length - 1]);
+    return true;
+  }
+  return false;
+}
+
+/** Ctrl+Entrée dans un tableau : descend dans la même colonne, ou crée une ligne. */
+function moveToCellBelow(
+  ctx: SlashCtx,
+  cell: HTMLTableCellElement,
+): { created: boolean } | null {
+  const row = cell.parentElement;
+  if (!(row instanceof HTMLTableRowElement)) return null;
+  const colIdx = Array.from(row.cells).indexOf(cell);
+  if (colIdx < 0) return null;
+  const nextRow = row.nextElementSibling;
+  if (nextRow instanceof HTMLTableRowElement) {
+    const targetCell = nextRow.cells[colIdx] ?? nextRow.cells[nextRow.cells.length - 1];
+    if (targetCell) {
+      placeCaretAtStart(targetCell);
+      return { created: false };
+    }
+  }
+  // Ligne suivante dans un tbody séparé ?
+  const tbody = row.parentElement;
+  const nextSection = tbody?.nextElementSibling;
+  if (nextSection) {
+    const firstRow = nextSection.querySelector<HTMLTableRowElement>("tr");
+    if (firstRow) {
+      const targetCell = firstRow.cells[colIdx] ?? firstRow.cells[firstRow.cells.length - 1];
+      if (targetCell) {
+        placeCaretAtStart(targetCell);
+        return { created: false };
+      }
+    }
+  }
+  // Pas de ligne suivante : on en crée une dans le tbody du tableau.
+  const table = cell.closest("table");
+  if (!table) return null;
+  addTableRow(ctx, table as HTMLTableElement, false);
+  const lastRow = table.tBodies[0]?.rows[table.tBodies[0].rows.length - 1];
+  const created = lastRow?.cells[colIdx] ?? lastRow?.cells[0];
+  if (created) {
+    placeCaretAtStart(created);
+    return { created: true };
+  }
+  return null;
 }
 
 function computeAnchor(): Anchor | null {
@@ -164,7 +339,12 @@ export function useSlashCommand({
   const matches = useMemo(() => {
     if (!state.active || state.mode !== "list") return [];
     const editor = editorRef.current;
-    const all = matchCommands(state.query);
+    // Dans un bloc math en édition, on bascule sur le registre math.
+    const registry =
+      editor && isInsideMathEdit(editor)
+        ? SLASH_MATH_COMMANDS
+        : SLASH_COMMANDS;
+    const all = matchCommands(state.query, registry);
     if (!editor) return all;
     return all.filter((c) => (c.isEnabled ? c.isEnabled(editor) : true));
   }, [state, editorRef]);
@@ -309,6 +489,84 @@ export function useSlashCommand({
       const s = stateRef.current;
 
       if (!s.active) {
+        const mod = e.ctrlKey || e.metaKey;
+
+        // Ctrl/Cmd + L : caret en fin de bloc (ou cellule de tableau).
+        if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "l") {
+          if (moveCaretToBlockEnd(editor)) {
+            e.preventDefault();
+            return;
+          }
+        }
+
+        // Ctrl/Cmd + Entrée : navigation inter-blocs ou inter-cellules.
+        if (mod && !e.altKey && !e.shiftKey && e.key === "Enter") {
+          const cell = getCurrentTableCell(editor);
+          if (cell) {
+            const ctx: SlashCtx = {
+              editor,
+              triggerNode: editor,
+              triggerOffset: 0,
+              onInput,
+            };
+            const res = moveToCellBelow(ctx, cell);
+            if (res) {
+              e.preventDefault();
+              if (res.created) onInput?.();
+              return;
+            }
+          } else {
+            const res = moveCaretToNextBlock(editor);
+            if (res) {
+              e.preventDefault();
+              if (res.created) onInput?.();
+              return;
+            }
+          }
+        }
+
+        // Tab / Shift+Tab dans une cellule de tableau.
+        if (e.key === "Tab" && !mod && !e.altKey) {
+          const cell = getCurrentTableCell(editor);
+          if (cell) {
+            if (e.shiftKey) {
+              if (moveToPrevCell(cell)) {
+                e.preventDefault();
+                return;
+              }
+              e.preventDefault();
+              return;
+            }
+            const res = moveToNextCell(cell);
+            e.preventDefault();
+            if (res.exited) onInput?.();
+            return;
+          }
+        }
+
+        // Dans un bloc math en édition :
+        //  - Tab → saute au placeholder suivant
+        //  - Entrée → commit la formule (rendu KaTeX, caret après)
+        // On n'a jamais besoin d'un vrai retour à la ligne dans une formule.
+        if (
+          isInsideMathEdit(editor) &&
+          !e.ctrlKey &&
+          !e.metaKey &&
+          !e.altKey
+        ) {
+          if (e.key === "Tab" && !e.shiftKey) {
+            if (handleMathTab(editor)) {
+              e.preventDefault();
+              return;
+            }
+          }
+          if (e.key === "Enter" && !e.shiftKey) {
+            if (commitActiveMathEdit(editor)) {
+              e.preventDefault();
+              return;
+            }
+          }
+        }
         if (e.key === "/" && !e.ctrlKey && !e.metaKey && !e.altKey) {
           if (!shouldTrigger(editor)) return;
           // Laisser le `/` s'insérer normalement, puis ouvrir le menu.

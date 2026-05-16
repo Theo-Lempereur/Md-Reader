@@ -1,5 +1,10 @@
 import type { ToolbarAction } from "../components/Toolbar";
 
+/** Caractère marqueur utilisé dans les templates LaTeX pour indiquer les
+ * positions de placeholders. Le premier devient la position du caret final ;
+ * les suivants servent à la navigation Tab. */
+export const MATH_PLACEHOLDER = "◆";
+
 export type SlashCtx = {
   editor: HTMLElement;
   triggerNode: Node;
@@ -33,8 +38,67 @@ export function clearTriggerText(
   sel.addRange(collapse);
 }
 
-function dispatchInput(editor: HTMLElement) {
+export function dispatchInput(editor: HTMLElement) {
   editor.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+/** Place le caret au 1er MATH_PLACEHOLDER trouvé dans `root` (et supprime ce
+ * marqueur). Si aucun placeholder n'existe, place le caret à la fin de `root`. */
+export function placeCaretAtFirstPlaceholder(root: Node): void {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let target: Text | null = null;
+  let idx = -1;
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text;
+    const i = node.data.indexOf(MATH_PLACEHOLDER);
+    if (i >= 0) {
+      target = node;
+      idx = i;
+      break;
+    }
+  }
+  const range = document.createRange();
+  if (target && idx >= 0) {
+    const data = target.data;
+    target.data = data.slice(0, idx) + data.slice(idx + MATH_PLACEHOLDER.length);
+    range.setStart(target, idx);
+  } else {
+    range.selectNodeContents(root);
+    range.collapse(false);
+  }
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+/** Saute au MATH_PLACEHOLDER suivant à l'intérieur d'un conteneur. Renvoie
+ * `true` s'il en a trouvé un, `false` sinon (et le caret reste en place). */
+export function jumpToNextPlaceholder(root: Node): boolean {
+  const sel = window.getSelection();
+  if (!sel) return false;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let target: Text | null = null;
+  let idx = -1;
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text;
+    const i = node.data.indexOf(MATH_PLACEHOLDER);
+    if (i >= 0) {
+      target = node;
+      idx = i;
+      break;
+    }
+  }
+  if (!target || idx < 0) return false;
+  const data = target.data;
+  target.data = data.slice(0, idx) + data.slice(idx + MATH_PLACEHOLDER.length);
+  const range = document.createRange();
+  range.setStart(target, idx);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  return true;
 }
 
 /** Insère un nœud HTML au caret et place le caret à l'intérieur (premier
@@ -208,6 +272,21 @@ export function insertTable(
     sel?.addRange(r);
   }
   dispatchInput(ctx.editor);
+}
+
+/** Cellule de tableau directement sous le caret, ou `null` si le caret n'est
+ * pas dans un `<td>`/`<th>` à l'intérieur de l'éditeur. */
+export function getCurrentTableCell(
+  editor: HTMLElement,
+): HTMLTableCellElement | null {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return null;
+  const node = sel.getRangeAt(0).startContainer;
+  if (!editor.contains(node)) return null;
+  const start = node.nodeType === 1 ? (node as Element) : node.parentElement;
+  if (!start) return null;
+  const cell = start.closest("td, th");
+  return cell instanceof HTMLTableCellElement ? cell : null;
 }
 
 /** Cherche le <table> pertinent depuis le caret : ancêtre direct,

@@ -1,4 +1,10 @@
-import { forwardRef, useImperativeHandle, useRef } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useImperativeHandle,
+  useRef,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { normalizeMarkdown } from "../markdown/normalize";
 import { highlightSearch, marginIcon, tokenizeLine } from "../markdown/source";
 import type { SearchHit } from "../types";
@@ -39,6 +45,37 @@ export const SourceView = forwardRef<SourceViewHandle, Props>(
       [content, onInput],
     );
 
+    const handleKeyDown = useCallback(
+      (e: ReactKeyboardEvent<HTMLDivElement>) => {
+        const root = rootRef.current;
+        if (!root) return;
+        const key = e.key;
+        const mod = e.ctrlKey || e.metaKey;
+
+        if (mod && !e.altKey && !e.shiftKey && key === "Enter") {
+          if (moveCaretToNextSrcLine(root)) {
+            e.preventDefault();
+            onInput?.();
+          }
+          return;
+        }
+        if (e.altKey && !mod && !e.shiftKey && key === "Enter") {
+          if (insertBlankSrcLineBelow(root)) {
+            e.preventDefault();
+            onInput?.();
+          }
+          return;
+        }
+        if (mod && !e.altKey && !e.shiftKey && key.toLowerCase() === "l") {
+          if (moveCaretToLineEnd()) {
+            e.preventDefault();
+          }
+          return;
+        }
+      },
+      [onInput],
+    );
+
     const normalizedContent = normalizeMarkdown(content);
     const lines = normalizedContent.split("\n");
     return (
@@ -48,6 +85,7 @@ export const SourceView = forwardRef<SourceViewHandle, Props>(
         contentEditable
         suppressContentEditableWarning
         onInput={onInput}
+        onKeyDown={handleKeyDown}
       >
         {lines.map((line, i) => {
           const mi = marginIcon(line);
@@ -195,4 +233,109 @@ function findSrcContent(node: Node | null): HTMLElement | null {
     cur = cur.parentNode;
   }
   return null;
+}
+
+function getCurrentSrcLine(root: HTMLDivElement): HTMLDivElement | null {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return null;
+  const node = sel.getRangeAt(0).startContainer;
+  if (!root.contains(node)) return null;
+  const content = findSrcContent(node);
+  const line = content?.parentElement;
+  if (line instanceof HTMLDivElement && line.classList.contains("src-line")) {
+    return line;
+  }
+  return null;
+}
+
+function placeCaretAtStart(el: HTMLElement) {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+function placeCaretAtEnd(el: HTMLElement) {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+function createBlankSrcLine(): HTMLDivElement {
+  const line = document.createElement("div");
+  line.className = "src-line";
+
+  const ln = document.createElement("div");
+  ln.className = "ln";
+  ln.contentEditable = "false";
+
+  const margin = document.createElement("div");
+  margin.className = "margin-icon";
+  margin.contentEditable = "false";
+
+  const content = document.createElement("div");
+  content.className = "src-content";
+  const span = document.createElement("span");
+  span.textContent = "​";
+  content.appendChild(span);
+
+  line.appendChild(ln);
+  line.appendChild(margin);
+  line.appendChild(content);
+  return line;
+}
+
+function renumberLines(root: HTMLDivElement) {
+  const lines = root.querySelectorAll<HTMLDivElement>(".src-line > .ln");
+  lines.forEach((el, i) => {
+    el.textContent = String(i + 1);
+  });
+}
+
+function moveCaretToNextSrcLine(root: HTMLDivElement): boolean {
+  const current = getCurrentSrcLine(root);
+  if (!current) return false;
+  const next = current.nextElementSibling;
+  if (next instanceof HTMLDivElement && next.classList.contains("src-line")) {
+    const content = next.querySelector<HTMLDivElement>(".src-content");
+    if (content) {
+      placeCaretAtStart(content);
+      return true;
+    }
+  }
+  // Dernière ligne : créer une ligne vide à la fin.
+  const blank = createBlankSrcLine();
+  root.appendChild(blank);
+  renumberLines(root);
+  const content = blank.querySelector<HTMLDivElement>(".src-content");
+  if (content) placeCaretAtStart(content);
+  return true;
+}
+
+function insertBlankSrcLineBelow(root: HTMLDivElement): boolean {
+  const current = getCurrentSrcLine(root);
+  if (!current || !current.parentNode) return false;
+  const blank = createBlankSrcLine();
+  current.parentNode.insertBefore(blank, current.nextSibling);
+  renumberLines(root);
+  const content = blank.querySelector<HTMLDivElement>(".src-content");
+  if (content) placeCaretAtStart(content);
+  return true;
+}
+
+function moveCaretToLineEnd(): boolean {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return false;
+  const node = sel.getRangeAt(0).startContainer;
+  const content = findSrcContent(node);
+  if (!content) return false;
+  placeCaretAtEnd(content);
+  return true;
 }

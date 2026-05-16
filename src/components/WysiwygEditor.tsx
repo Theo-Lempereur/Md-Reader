@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { normalizeMarkdown } from "../markdown/normalize";
 import { renderMarkdown } from "../markdown/render";
 import { htmlToMarkdown } from "../lib/htmlToMarkdown";
+import { attachMathDoubleClick } from "../slash/math";
 import { runWysiwygCommand } from "../slash/runners";
 import { useSlashCommand } from "../slash/useSlashCommand";
 import { SlashMenu } from "./SlashMenu";
@@ -58,6 +59,13 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
       el.addEventListener("input", handler);
       return () => el.removeEventListener("input", handler);
     }, [onInput]);
+
+    // Double-clic sur une formule rendue → ré-ouvre l'édition.
+    useEffect(() => {
+      const el = divRef.current;
+      if (!el || !enabled) return;
+      return attachMathDoubleClick(el);
+    }, [enabled]);
 
     useImperativeHandle(
       ref,
