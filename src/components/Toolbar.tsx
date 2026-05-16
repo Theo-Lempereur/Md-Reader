@@ -201,12 +201,6 @@ export function Toolbar({
                 </span>
                 Page HTML
               </button>
-              <button onClick={() => onExport("pdf")}>
-                <span className="menu-icon">
-                  <Icon.Download />
-                </span>
-                PDF
-              </button>
               <hr />
               <button onClick={() => onExport("print")}>
                 <span className="menu-icon">

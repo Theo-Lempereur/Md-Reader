@@ -721,6 +721,124 @@ button {
   margin: 4px 0;
 }
 
+/* ============ Slash menu (preview commands) ============ */
+.slash-menu {
+  position: fixed;
+  z-index: 50;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-2);
+  min-width: 240px;
+  padding: 4px;
+  font-size: 13px;
+  color: var(--text);
+}
+.slash-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+}
+.slash-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+.slash-menu-item:hover {
+  background: var(--surface-2);
+}
+.slash-menu-item.selected {
+  background: var(--surface-2);
+  outline: 1px solid var(--line-strong);
+}
+.slash-menu-label {
+  flex: 1;
+}
+.slash-menu-hint {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.slash-menu-empty {
+  padding: 10px 12px;
+  color: var(--muted);
+  font-style: italic;
+}
+.slash-menu-form {
+  padding: 8px 8px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 240px;
+}
+.slash-menu-form-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.slash-menu-form-row {
+  display: flex;
+  gap: 10px;
+}
+.slash-menu-form-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--muted);
+  flex: 1;
+}
+.slash-menu-form-row input {
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 5px 7px;
+  font-size: 13px;
+  font-family: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+.slash-menu-form-row input:focus {
+  outline: 2px solid var(--accent, var(--line-strong));
+  outline-offset: -1px;
+}
+.slash-menu-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.slash-menu-form-actions button {
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.slash-menu-form-actions button:hover {
+  background: var(--surface-2);
+}
+.slash-menu-form-actions button.primary {
+  background: var(--accent, var(--text));
+  color: var(--surface);
+  border-color: transparent;
+}
+
 /* ============ Content area ============ */
 .content {
   flex: 1;
@@ -1891,4 +2009,311 @@ select.twk-field {
 .twk-launcher svg {
   width: 16px;
   height: 16px;
+}
+
+/* ============ Export PDF natif (WebView2.PrintToPdf) ============ */
+/* `body.is-exporting-pdf` est appliqué juste avant l'appel Rust qui capture
+   le DOM. Les marges et la taille de page sont contrôlées côté Rust ; CSS
+   gère uniquement le layout et les couleurs. */
+
+body.is-exporting-pdf .topbar,
+body.is-exporting-pdf .toolbar-wrap,
+body.is-exporting-pdf .statusbar,
+body.is-exporting-pdf .side-source,
+body.is-exporting-pdf .tabs,
+body.is-exporting-pdf .file-menu,
+body.is-exporting-pdf .export-menu,
+body.is-exporting-pdf .export-wrap,
+body.is-exporting-pdf .md-block-tools,
+body.is-exporting-pdf .floating-toolbar,
+body.is-exporting-pdf .tweaks-panel,
+body.is-exporting-pdf .twk-launcher,
+body.is-exporting-pdf .reading-blocks-overlay,
+body.is-exporting-pdf .search-bar,
+body.is-exporting-pdf .slash-menu,
+body.is-exporting-pdf .pdf-modal-backdrop {
+  display: none !important;
+}
+
+/* Déverrouille les hauteurs/overflows : sans ça, le PDF ne contient qu'une page. */
+body.is-exporting-pdf,
+body.is-exporting-pdf #root,
+body.is-exporting-pdf .app,
+body.is-exporting-pdf .content,
+body.is-exporting-pdf .reading-pane,
+body.is-exporting-pdf .main {
+  height: auto !important;
+  min-height: 0 !important;
+  overflow: visible !important;
+  display: block !important;
+}
+
+/* Largeur de texte calée sur la zone utile de la page PDF (marges côté Rust). */
+body.is-exporting-pdf .app .reading,
+body.is-exporting-pdf .app .reading-blocks .md-block-inner {
+  max-width: 100% !important;
+  width: 100% !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+body.is-exporting-pdf .reading-blocks {
+  padding: 0 !important;
+}
+body.is-exporting-pdf .reading-blocks .md-block {
+  display: block !important;
+  background: transparent !important;
+}
+
+/* Évite titres orphelins et tableaux/blocs coupés en plein milieu. */
+body.is-exporting-pdf .reading h1,
+body.is-exporting-pdf .reading h2,
+body.is-exporting-pdf .reading h3,
+body.is-exporting-pdf .reading h4,
+body.is-exporting-pdf .reading h5,
+body.is-exporting-pdf .reading h6 {
+  break-after: avoid;
+  page-break-after: avoid;
+}
+body.is-exporting-pdf .reading p,
+body.is-exporting-pdf .reading li {
+  orphans: 3;
+  widows: 3;
+}
+body.is-exporting-pdf .reading pre,
+body.is-exporting-pdf .reading table,
+body.is-exporting-pdf .reading blockquote,
+body.is-exporting-pdf .reading .katex-display,
+body.is-exporting-pdf .reading img {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+body.is-exporting-pdf .reading img {
+  max-width: 100% !important;
+  height: auto !important;
+}
+body.is-exporting-pdf .reading pre {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+/* Mode 1 : Noir & blanc — texte noir, fond blanc, accents neutralisés. */
+body.is-exporting-pdf[data-pdf-colors="bw"] .app {
+  --bg: #ffffff !important;
+  --surface: #ffffff !important;
+  --surface-2: #f5f5f5 !important;
+  --text: #000000 !important;
+  --text-2: #1f1f1f !important;
+  --muted: #555555 !important;
+  --faint: #d0d0d0 !important;
+  --line: #e5e5e5 !important;
+  --line-strong: #cccccc !important;
+  --accent: #000000 !important;
+  --accent-soft: transparent !important;
+  --selection: transparent !important;
+  --tag-h1: #000 !important;
+  --tag-list: #555 !important;
+  --tag-quote: #888 !important;
+  --tag-code: #555 !important;
+  background: #ffffff !important;
+  color: #000000 !important;
+}
+body.is-exporting-pdf[data-pdf-colors="bw"] .reading,
+body.is-exporting-pdf[data-pdf-colors="bw"] .reading * {
+  color: #000 !important;
+}
+body.is-exporting-pdf[data-pdf-colors="bw"] .reading a {
+  color: #000 !important;
+  text-decoration: underline;
+}
+body.is-exporting-pdf[data-pdf-colors="bw"] .reading pre,
+body.is-exporting-pdf[data-pdf-colors="bw"] .reading th {
+  background: #f5f5f5 !important;
+  border: 1px solid #e5e5e5 !important;
+}
+body.is-exporting-pdf[data-pdf-colors="bw"] .reading code {
+  background: #f5f5f5 !important;
+  border: 1px solid #e5e5e5 !important;
+}
+body.is-exporting-pdf[data-pdf-colors="bw"] .reading td {
+  border: 1px solid #ddd !important;
+}
+
+/* Mode 2 : Palette claire — fond blanc + texte sombre, mais accents/teintes
+   de la palette conservés (titres, liens, code…). */
+body.is-exporting-pdf[data-pdf-colors="palette-light"] .app {
+  --bg: #ffffff !important;
+  --surface: #ffffff !important;
+  --surface-2: #f6f6f6 !important;
+  --text: #18181b !important;
+  --text-2: #2a2a2e !important;
+  --muted: #5a5a60 !important;
+  --line: #e6e6e6 !important;
+  --line-strong: #cfcfcf !important;
+  background: #ffffff !important;
+  color: #18181b !important;
+}
+/* Les variables --accent, --tag-h1, --syntax, --tag-list, --tag-quote, --tag-code
+   restent celles de la palette active : titres et accents gardent leur teinte. */
+
+/* Mode 3 : Capture fidèle — aucune surcharge.
+   Si l'app est en dark mode, le PDF reproduit fidèlement (fond sombre). */
+body.is-exporting-pdf[data-pdf-colors="palette-exact"] {
+  /* Aucune règle : on garde data-theme & data-palette tels quels. */
+}
+
+/* Désactive animations pendant la capture. */
+body.is-exporting-pdf * {
+  animation: none !important;
+  transition: none !important;
+}
+
+/* ============ Modale "Exporter en PDF" ============ */
+.pdf-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2147483646;
+  animation: pdf-fade 120ms ease-out;
+}
+@keyframes pdf-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.pdf-modal {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 60px -10px rgba(0, 0, 0, 0.4),
+    0 4px 16px -4px rgba(0, 0, 0, 0.2);
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: pdf-pop 140ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+@keyframes pdf-pop {
+  from {
+    transform: translateY(8px) scale(0.98);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+.pdf-modal-head {
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.pdf-modal-head h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.pdf-modal-body {
+  padding: 14px 20px 6px;
+  overflow: auto;
+}
+
+.pdf-section + .pdf-section {
+  margin-top: 14px;
+}
+.pdf-section h3 {
+  margin: 0 0 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.pdf-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pdf-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+  background: var(--surface);
+}
+.pdf-option:hover {
+  background: var(--surface-2);
+  border-color: var(--line-strong);
+}
+.pdf-option.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.pdf-option input[type="radio"] {
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+.pdf-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.pdf-option-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+.pdf-option-desc {
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.pdf-modal-foot {
+  padding: 12px 20px 16px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.pdf-btn {
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+}
+.pdf-btn:hover {
+  background: var(--surface-2);
+}
+.pdf-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface);
+}
+.pdf-btn.primary:hover {
+  filter: brightness(1.1);
 }

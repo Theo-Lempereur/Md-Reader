@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import type { PdfColorMode, PdfPageFormat } from "../types";
 
 export type OpenedFile = {
   path: string;
@@ -57,4 +58,32 @@ export async function writeToPath(
 export function basename(path: string): string {
   const parts = path.split(/[\\/]/);
   return parts[parts.length - 1] || path;
+}
+
+export async function exportPdfDialog(
+  suggestedName: string,
+  options: { format: PdfPageFormat; colorMode: PdfColorMode },
+): Promise<string | null> {
+  const defaultPath = suggestedName.replace(/\.(md|markdown|txt)$/i, "") + ".pdf";
+  const target = await save({
+    defaultPath,
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  });
+  if (!target) return null;
+
+  // Configure le rendu DOM avant l'appel natif : le PDF est généré à partir
+  // de l'état visible de la webview à l'instant T.
+  document.body.classList.add("is-exporting-pdf");
+  document.body.dataset.pdfColors = options.colorMode;
+
+  // Petit délai pour laisser le navigateur appliquer les styles avant capture.
+  await new Promise((r) => setTimeout(r, 50));
+
+  try {
+    await invoke("export_pdf", { path: target, format: options.format });
+    return target;
+  } finally {
+    document.body.classList.remove("is-exporting-pdf");
+    delete document.body.dataset.pdfColors;
+  }
 }

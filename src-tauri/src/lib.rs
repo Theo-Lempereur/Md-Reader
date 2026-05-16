@@ -1,5 +1,7 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Listener, Manager};
 
 #[derive(Clone, serde::Serialize)]
@@ -22,6 +24,151 @@ async fn read_text_file(path: String) -> Result<String, String> {
 #[tauri::command]
 async fn write_text_file(path: String, content: String) -> Result<(), String> {
     std::fs::write(&path, content).map_err(|e| e.to_string())
+}
+
+#[cfg(windows)]
+mod pdf_export {
+    use std::sync::{Arc, Mutex};
+    use tauri::webview::PlatformWebview;
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2Environment6, ICoreWebView2PrintSettings, ICoreWebView2_2,
+        ICoreWebView2_7, COREWEBVIEW2_PRINT_ORIENTATION_PORTRAIT,
+    };
+    use webview2_com::PrintToPdfCompletedHandler;
+    use windows_pdf::core::{Interface, HSTRING};
+
+    pub fn print_to_pdf<F>(
+        pv: &PlatformWebview,
+        path: &str,
+        format: &str,
+        on_complete: F,
+    ) -> Result<(), String>
+    where
+        F: FnOnce(Result<(), String>) + Send + 'static,
+    {
+        let controller = pv.controller();
+        unsafe {
+            let webview = controller
+                .CoreWebView2()
+                .map_err(|e| format!("CoreWebView2: {}", e))?;
+            let webview7: ICoreWebView2_7 = webview
+                .cast()
+                .map_err(|e| format!("cast ICoreWebView2_7: {}", e))?;
+            let webview2: ICoreWebView2_2 = webview
+                .cast()
+                .map_err(|e| format!("cast ICoreWebView2_2: {}", e))?;
+            let env = webview2
+                .Environment()
+                .map_err(|e| format!("Environment: {}", e))?;
+            let env6: ICoreWebView2Environment6 = env
+                .cast()
+                .map_err(|e| format!("cast ICoreWebView2Environment6: {}", e))?;
+
+            let settings: ICoreWebView2PrintSettings = env6
+                .CreatePrintSettings()
+                .map_err(|e| format!("CreatePrintSettings: {}", e))?;
+
+            // Dimensions en pouces. A4 = 210×297 mm, Letter = 8.5×11 in.
+            let (page_w, page_h) = match format.to_ascii_lowercase().as_str() {
+                "letter" => (8.5_f64, 11.0_f64),
+                _ => (8.27_f64, 11.69_f64),
+            };
+            // Marges : 18 mm verticales (~0.71"), 16 mm horizontales (~0.63").
+            settings.SetPageWidth(page_w).ok();
+            settings.SetPageHeight(page_h).ok();
+            settings.SetMarginTop(0.71).ok();
+            settings.SetMarginBottom(0.71).ok();
+            settings.SetMarginLeft(0.63).ok();
+            settings.SetMarginRight(0.63).ok();
+            settings.SetShouldPrintBackgrounds(true).ok();
+            settings.SetShouldPrintHeaderAndFooter(false).ok();
+            settings.SetScaleFactor(1.0).ok();
+            settings
+                .SetOrientation(COREWEBVIEW2_PRINT_ORIENTATION_PORTRAIT)
+                .ok();
+
+            let path_hstring = HSTRING::from(path);
+            let cb = Arc::new(Mutex::new(Some(on_complete)));
+            let cb_inner = cb.clone();
+            let handler = PrintToPdfCompletedHandler::create(Box::new(
+                move |error_code, is_successful| {
+                    if let Ok(mut guard) = cb_inner.lock() {
+                        if let Some(f) = guard.take() {
+                            match error_code {
+                                Ok(()) if is_successful => f(Ok(())),
+                                Ok(()) => f(Err(
+                                    "PrintToPdf : opération annulée ou non aboutie."
+                                        .to_string(),
+                                )),
+                                Err(e) => f(Err(format!("PrintToPdf : {}", e))),
+                            }
+                        }
+                    }
+                    Ok(())
+                },
+            ));
+
+            webview7
+                .PrintToPdf(&path_hstring, &settings, &handler)
+                .map_err(|e| format!("PrintToPdf: {}", e))?;
+        }
+        Ok(())
+    }
+}
+
+#[tauri::command]
+async fn export_pdf(
+    app: tauri::AppHandle,
+    path: String,
+    format: String,
+) -> Result<(), String> {
+    #[cfg(not(windows))]
+    {
+        let _ = (app, path, format);
+        return Err("Export PDF non supporté sur cette plateforme.".to_string());
+    }
+
+    #[cfg(windows)]
+    {
+        let window = app
+            .get_webview_window("main")
+            .ok_or_else(|| "Fenêtre principale introuvable.".to_string())?;
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
+        let tx = Arc::new(Mutex::new(Some(tx)));
+        let tx_for_completion = tx.clone();
+        let tx_for_sync_err = tx.clone();
+
+        let path_clone = path.clone();
+        let format_clone = format.clone();
+
+        window
+            .with_webview(move |platform_webview| {
+                let res = pdf_export::print_to_pdf(
+                    &platform_webview,
+                    &path_clone,
+                    &format_clone,
+                    move |completion| {
+                        if let Ok(mut guard) = tx_for_completion.lock() {
+                            if let Some(sender) = guard.take() {
+                                let _ = sender.send(completion);
+                            }
+                        }
+                    },
+                );
+                if let Err(e) = res {
+                    if let Ok(mut guard) = tx_for_sync_err.lock() {
+                        if let Some(sender) = guard.take() {
+                            let _ = sender.send(Err(e));
+                        }
+                    }
+                }
+            })
+            .map_err(|e| format!("with_webview: {}", e))?;
+
+        rx.await
+            .map_err(|e| format!("oneshot recv: {}", e))?
+    }
 }
 
 fn is_markdown_path(path: &Path) -> bool {
@@ -237,7 +384,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             read_text_file,
-            write_text_file
+            write_text_file,
+            export_pdf
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

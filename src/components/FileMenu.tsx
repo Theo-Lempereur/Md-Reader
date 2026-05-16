@@ -7,6 +7,7 @@ type Props = {
   onOpen: () => void;
   onSave: () => void;
   onSaveAs: () => void;
+  onExportPdf: () => void;
 };
 
 export function FileMenu({
@@ -16,6 +17,7 @@ export function FileMenu({
   onOpen,
   onSave,
   onSaveAs,
+  onExportPdf,
 }: Props) {
   const run = (fn: () => void) => () => {
     setOpen(false);
@@ -62,6 +64,13 @@ export function FileMenu({
             </span>
             Enregistrer sous…
             <span className="kbd">⇧⌘S</span>
+          </button>
+          <hr />
+          <button onClick={run(onExportPdf)}>
+            <span className="menu-icon">
+              <Icon.Download />
+            </span>
+            Exporter en PDF…
           </button>
         </div>
       )}

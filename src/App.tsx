@@ -41,9 +41,11 @@ import {
   TweakToggle,
 } from "./components/Tweaks";
 import { FileMenu } from "./components/FileMenu";
+import { PdfExportModal } from "./components/PdfExportModal";
 import { WindowControls } from "./components/WindowControls";
 import {
   basename,
+  exportPdfDialog,
   openFileDialog,
   saveAsDialog,
   writeToPath,
@@ -72,6 +74,8 @@ const DEFAULT_TWEAKS: Tweaks = {
   autoSave: false,
   textWidth: 60,
   syncScroll: true,
+  pdfPageFormat: "a4",
+  pdfColorMode: "bw",
 };
 
 const TEXT_WIDTH_MIN = 30;
@@ -88,6 +92,8 @@ const TWEAK_OPTIONS = {
   density: ["aere", "compact"],
   tabStyle: ["browser", "vscode", "pastille"],
   toolbarPos: ["top", "floating"],
+  pdfPageFormat: ["a4", "letter"],
+  pdfColorMode: ["bw", "palette-light", "palette-exact"],
 } satisfies {
   [K in keyof Tweaks as Tweaks[K] extends string ? K : never]: Tweaks[K][];
 };
@@ -137,6 +143,8 @@ function loadTweaks(): Tweaks {
           : DEFAULT_TWEAKS.textWidth,
       syncScroll:
         typeof s.syncScroll === "boolean" ? s.syncScroll : DEFAULT_TWEAKS.syncScroll,
+      pdfPageFormat: readStringTweak(s, "pdfPageFormat"),
+      pdfColorMode: readStringTweak(s, "pdfColorMode"),
     };
   } catch {
     return DEFAULT_TWEAKS;
@@ -248,6 +256,7 @@ function App() {
   const [viewMode, setViewMode] = useState<ViewMode>("preview");
   const [exportOpen, setExportOpen] = useState(false);
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
+  const [pdfModalOpen, setPdfModalOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQ, setSearchQ] = useState("");
   const [currentHit] = useState<SearchHit | null>(null);
@@ -791,7 +800,31 @@ function App() {
 
   const onExport = (kind: ExportKind) => {
     setExportOpen(false);
-    if (kind === "print") window.print();
+    if (kind === "pdf") {
+      setPdfModalOpen(true);
+      return;
+    }
+    if (kind === "print") {
+      setEditMode(false);
+      setTimeout(() => window.print(), 80);
+    }
+  };
+
+  const handlePdfExport = async (opts: {
+    format: Tweaks["pdfPageFormat"];
+    colorMode: Tweaks["pdfColorMode"];
+  }) => {
+    setTweak("pdfPageFormat", opts.format);
+    setTweak("pdfColorMode", opts.colorMode);
+    setPdfModalOpen(false);
+    setEditMode(false);
+    await new Promise((r) => setTimeout(r, 80));
+    const suggested = active?.name ?? "document.md";
+    try {
+      await exportPdfDialog(suggested, opts);
+    } catch (err) {
+      console.error("Export PDF échoué :", err);
+    }
   };
 
   const hitCount = useMemo(() => {
@@ -821,6 +854,7 @@ function App() {
           onOpen={handleOpen}
           onSave={handleSave}
           onSaveAs={handleSaveAs}
+          onExportPdf={() => onExport("pdf")}
         />
         <div className="topbar-sep" data-tauri-drag-region />
         <div
@@ -1229,6 +1263,15 @@ function App() {
           onChange={(v) => setTweak("autoSave", v)}
         />
       </TweaksPanel>
+
+      {pdfModalOpen && (
+        <PdfExportModal
+          initialFormat={tweaks.pdfPageFormat}
+          initialColorMode={tweaks.pdfColorMode}
+          onCancel={() => setPdfModalOpen(false)}
+          onConfirm={handlePdfExport}
+        />
+      )}
     </div>
   );
 }

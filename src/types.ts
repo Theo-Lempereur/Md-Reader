@@ -16,6 +16,9 @@ export type TabStyle = "browser" | "vscode" | "pastille";
 export type ToolbarPos = "top" | "floating";
 export type ViewMode = "preview" | "source";
 
+export type PdfPageFormat = "a4" | "letter";
+export type PdfColorMode = "bw" | "palette-light" | "palette-exact";
+
 export type Tweaks = {
   theme: Theme;
   palette: Palette;
@@ -28,6 +31,10 @@ export type Tweaks = {
   textWidth: number;
   /** Synchronisation du scroll entre la preview et la source latérale. */
   syncScroll: boolean;
+  /** Format de page pour l'export PDF. */
+  pdfPageFormat: PdfPageFormat;
+  /** Mode de couleurs pour l'export PDF. */
+  pdfColorMode: PdfColorMode;
 };
 
 export type SearchHit = {
