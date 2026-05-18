@@ -40,6 +40,7 @@ export type Tweaks = {
 export type SearchHit = {
   line: number;
   start: number;
+  end: number;
 };
 
 /** Position du caret dans la vue Source (ligne 0-indexée, colonne en caractères). */

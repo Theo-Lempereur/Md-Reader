@@ -1,10 +1,12 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -21,7 +23,15 @@ import {
 } from "./markdown/render";
 import { normalizeMarkdown } from "./markdown/normalize";
 import { WELCOME_MD } from "./welcome";
-import { tokenizeLine, marginIcon } from "./markdown/source";
+import { highlightSearch, tokenizeLine, marginIcon } from "./markdown/source";
+import {
+  insertBlankSrcLineBelow,
+  moveCaretToLineEnd,
+  moveCaretToNextSrcLine,
+  readMarkdownFromSourceRoot,
+  readSourceCaret,
+  writeSourceCaret,
+} from "./markdown/sourceDom";
 import { Icon } from "./components/Icons";
 import { SourceView, type SourceViewHandle } from "./components/SourceView";
 import {
@@ -62,6 +72,7 @@ import type {
   PersistedSession,
   PersistedUiState,
   SearchHit,
+  SourceCaret,
   TabStyle,
   Theme,
   ToolbarPos,
@@ -325,6 +336,10 @@ function SourceMini({
   currentSyncLine,
   lineToBlock,
   highlightedBlock,
+  search,
+  currentHit,
+  editable = false,
+  onMarkdownChange,
   onJumpToBlock,
 }: {
   content: string;
@@ -335,11 +350,65 @@ function SourceMini({
   lineToBlock?: Map<number, number>;
   /** Bloc actuellement surligné (toutes ses lignes prennent la classe `jump-highlight`). */
   highlightedBlock?: number | null;
+  search?: string;
+  currentHit?: SearchHit | null;
+  editable?: boolean;
+  onMarkdownChange?: (content: string) => void;
   onJumpToBlock?: (blockKey: number) => void;
 }) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const pendingCaretRef = useRef<SourceCaret | null>(null);
   const lines = normalizeMarkdown(content).split("\n");
+  const emitMarkdownChange = useCallback(() => {
+    if (!editable || !onMarkdownChange) return;
+    pendingCaretRef.current = readSourceCaret(rootRef.current);
+    onMarkdownChange(readMarkdownFromSourceRoot(rootRef.current, content));
+  }, [content, editable, onMarkdownChange]);
+  const handleKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (!editable) return;
+      const root = rootRef.current;
+      if (!root) return;
+      const key = e.key;
+      const mod = e.ctrlKey || e.metaKey;
+
+      if (mod && !e.altKey && !e.shiftKey && key === "Enter") {
+        if (moveCaretToNextSrcLine(root)) {
+          e.preventDefault();
+          emitMarkdownChange();
+        }
+        return;
+      }
+      if (e.altKey && !mod && !e.shiftKey && key === "Enter") {
+        if (insertBlankSrcLineBelow(root)) {
+          e.preventDefault();
+          emitMarkdownChange();
+        }
+        return;
+      }
+      if (mod && !e.altKey && !e.shiftKey && key.toLowerCase() === "l") {
+        if (moveCaretToLineEnd()) e.preventDefault();
+      }
+    },
+    [editable, emitMarkdownChange],
+  );
+
+  useLayoutEffect(() => {
+    if (!editable || !pendingCaretRef.current) return;
+    writeSourceCaret(rootRef.current, pendingCaretRef.current);
+    pendingCaretRef.current = null;
+  }, [content, editable]);
+
   return (
-    <div className="source source-mini">
+    <div
+      className={`source source-mini${editable ? " editable" : ""}`}
+      ref={rootRef}
+      contentEditable={editable}
+      suppressContentEditableWarning
+      spellCheck={false}
+      onInput={emitMarkdownChange}
+      onKeyDown={handleKeyDown}
+    >
       {lines.map((line, i) => {
         const absIdx = startLine + i;
         const mi = marginIcon(line);
@@ -360,15 +429,24 @@ function SourceMini({
                 : undefined
             }
           >
-            <div className="ln">{absIdx + 1}</div>
-            <div className={`margin-icon ${mi ? mi.cls : ""}`}>
+            <div className="ln" contentEditable={false}>
+              {absIdx + 1}
+            </div>
+            <div
+              className={`margin-icon ${mi ? mi.cls : ""}`}
+              contentEditable={false}
+            >
               {mi ? mi.label : ""}
             </div>
             <div className="src-content">
-              {line ? tokenizeLine(line, i) : <span>&#8203;</span>}
+              {search
+                ? highlightSearch(line, search, absIdx, currentHit ?? null)
+                : line
+                  ? tokenizeLine(line, absIdx)
+                  : <span>&#8203;</span>}
             </div>
             {hasJump && (
-              <div className="src-line-tools">
+              <div className="src-line-tools" contentEditable={false}>
                 <button
                   type="button"
                   className="src-line-btn"
@@ -421,7 +499,7 @@ function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const updater = useUpdater();
   const [searchQ, setSearchQ] = useState("");
-  const [currentHit] = useState<SearchHit | null>(null);
+  const [currentHitIndex, setCurrentHitIndex] = useState(0);
   const [floatPos, setFloatPos] = useState<{ x: number; y: number } | null>(
     null,
   );
@@ -432,6 +510,7 @@ function App() {
   // après le re-centrage automatique. Persiste jusqu'au prochain clic ou changement d'onglet.
   const [highlightedBlock, setHighlightedBlock] = useState<number | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const readingPaneRef = useRef<HTMLDivElement | null>(null);
   const sideBodyRef = useRef<HTMLDivElement | null>(null);
   const blockEls = useRef<
@@ -439,6 +518,10 @@ function App() {
   >(new Map());
   const lineEls = useRef<Map<number, HTMLDivElement>>(new Map());
   const syncingRef = useRef(false);
+  const sideSourceRefreshTimerRef = useRef<number | null>(null);
+  const sideSourceDraftRef = useRef<{ tabId: string; content: string } | null>(
+    null,
+  );
   const textWidthWheelDeltaRef = useRef(0);
   const wysiwygHandles = useRef<Map<string, WysiwygEditorHandle | null>>(
     new Map(),
@@ -463,14 +546,163 @@ function App() {
 
   const getActiveMarkdown = useCallback((): string | null => {
     if (sourceVisible) return sourceRef.current?.getMarkdown() ?? null;
+    if (sideSourceDraftRef.current?.tabId === activeId) {
+      return sideSourceDraftRef.current.content;
+    }
     return wysiwygHandles.current.get(activeId)?.getMarkdown() ?? null;
   }, [sourceVisible, activeId]);
+
+  const searchHits = useMemo<SearchHit[]>(() => {
+    if (!searchQ || !active) return [];
+    const needle = searchQ.toLowerCase();
+    if (!needle) return [];
+    const hits: SearchHit[] = [];
+    active.content.split("\n").forEach((line, lineIdx) => {
+      const lowerLine = line.toLowerCase();
+      let start = 0;
+      while (start <= lowerLine.length) {
+        const idx = lowerLine.indexOf(needle, start);
+        if (idx === -1) break;
+        hits.push({ line: lineIdx, start: idx, end: idx + searchQ.length });
+        start = idx + Math.max(searchQ.length, 1);
+      }
+    });
+    return hits;
+  }, [active, searchQ]);
+
+  const hitCount = searchHits.length;
+  const currentHit =
+    hitCount > 0 ? searchHits[Math.min(currentHitIndex, hitCount - 1)] : null;
+
+  useEffect(() => {
+    setCurrentHitIndex(0);
+  }, [activeId, searchQ]);
+
+  useEffect(() => {
+    if (currentHitIndex < hitCount) return;
+    setCurrentHitIndex(Math.max(0, hitCount - 1));
+  }, [currentHitIndex, hitCount]);
+
+  const navigateSearch = useCallback(
+    (direction: 1 | -1) => {
+      if (!hitCount) return;
+      setCurrentHitIndex((idx) => (idx + direction + hitCount) % hitCount);
+    },
+    [hitCount],
+  );
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchQ("");
+    setCurrentHitIndex(0);
+    setHighlightedBlock(null);
+  }, []);
+
+  useEffect(() => {
+    if (!searchOpen) return;
+    requestAnimationFrame(() => searchInputRef.current?.focus());
+  }, [searchOpen]);
 
   const markDirty = useCallback((id: string) => {
     setTabs((prev) =>
       prev.map((t) => (t.id === id && !t.dirty ? { ...t, dirty: true } : t)),
     );
   }, []);
+
+  const clearSideSourceDraft = useCallback((tabId?: string) => {
+    if (!tabId || sideSourceDraftRef.current?.tabId === tabId) {
+      sideSourceDraftRef.current = null;
+      if (sideSourceRefreshTimerRef.current != null) {
+        window.clearTimeout(sideSourceRefreshTimerRef.current);
+        sideSourceRefreshTimerRef.current = null;
+      }
+    }
+  }, []);
+
+  const scheduleSideSourceRefresh = useCallback(
+    (tabId: string, content: string) => {
+      sideSourceDraftRef.current = { tabId, content };
+      wysiwygHandles.current.get(tabId)?.refreshFromContent(content);
+      if (sideSourceRefreshTimerRef.current != null) {
+        window.clearTimeout(sideSourceRefreshTimerRef.current);
+      }
+      sideSourceRefreshTimerRef.current = window.setTimeout(() => {
+        if (
+          sideSourceDraftRef.current?.tabId === tabId &&
+          sideSourceDraftRef.current.content === content
+        ) {
+          sideSourceDraftRef.current = null;
+        }
+        sideSourceRefreshTimerRef.current = null;
+      }, 180);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (sideSourceRefreshTimerRef.current != null) {
+        window.clearTimeout(sideSourceRefreshTimerRef.current);
+      }
+    };
+  }, []);
+
+  const updateFromSideSource = useCallback(
+    (nextSource: string) => {
+      if (!active || !sidePanel || !editMode) return;
+      const tabId = active.id;
+      const baseContent =
+        sideSourceDraftRef.current?.tabId === tabId
+          ? sideSourceDraftRef.current.content
+          : (wysiwygHandles.current.get(tabId)?.getMarkdown() ??
+            tabsRef.current.find((t) => t.id === tabId)?.content ??
+            active.content);
+
+      let content: string;
+      if (sidePanel.mode === "block") {
+        const lines = normalizeMarkdown(baseContent).split("\n");
+        const nextLines = normalizeMarkdown(nextSource).split("\n");
+        const start = sidePanel.block.lineStart;
+        const end = sidePanel.block.lineEnd;
+        lines.splice(start, end - start + 1, ...nextLines);
+        content = normalizeMarkdown(lines.join("\n"));
+        setSidePanel((prev) =>
+          prev?.mode === "block" && prev.block.key === sidePanel.block.key
+            ? {
+                mode: "block",
+                block: {
+                  ...prev.block,
+                  lineEnd: start + nextLines.length - 1,
+                  sourceLines: nextLines,
+                },
+              }
+            : prev,
+        );
+      } else {
+        content = normalizeMarkdown(nextSource);
+      }
+
+      setTabs((prev) =>
+        prev.map((t) =>
+          t.id === tabId ? { ...t, content, dirty: true } : t,
+        ),
+      );
+      scheduleSideSourceRefresh(tabId, content);
+    },
+    [active, editMode, scheduleSideSourceRefresh, sidePanel],
+  );
+
+  const syncActivePreviewContent = useCallback(() => {
+    if (!editMode || sourceVisible) return;
+    const md = wysiwygHandles.current.get(activeId)?.getMarkdown();
+    if (md == null) return;
+    const content = normalizeMarkdown(md);
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.id === activeId && t.content !== content ? { ...t, content } : t,
+      ),
+    );
+  }, [activeId, editMode, sourceVisible]);
 
   const toggleTaskAtLine = useCallback(
     (tabId: string, lineIndex: number, checked: boolean) => {
@@ -1161,9 +1393,11 @@ function App() {
     const timer = setTimeout(() => {
       for (const t of dirtyWithPath) {
         const md =
-          t.id === activeId && sourceVisible
-            ? sourceRef.current?.getMarkdown()
-            : wysiwygHandles.current.get(t.id)?.getMarkdown();
+          sideSourceDraftRef.current?.tabId === t.id
+            ? sideSourceDraftRef.current.content
+            : t.id === activeId && sourceVisible
+              ? sourceRef.current?.getMarkdown()
+              : wysiwygHandles.current.get(t.id)?.getMarkdown();
         if (md == null || !t.path) continue;
         const content = normalizeMarkdown(md);
         writeToPath(t.path, content)
@@ -1199,9 +1433,10 @@ function App() {
         handleNew();
       } else if (mod && key === "f") {
         e.preventDefault();
+        syncActivePreviewContent();
         setSearchOpen(true);
       } else if (e.key === "Escape") {
-        setSearchOpen(false);
+        closeSearch();
         setFileMenuOpen(false);
       } else if (mod && key === "m") {
         e.preventDefault();
@@ -1230,6 +1465,8 @@ function App() {
     handleOpen,
     handleNew,
     toggleEditMode,
+    syncActivePreviewContent,
+    closeSearch,
     sidePanel,
     editMode,
     viewMode,
@@ -1443,6 +1680,49 @@ function App() {
     }, 280);
   }, []);
 
+  useEffect(() => {
+    if (!searchOpen || !searchQ) {
+      setHighlightedBlock(null);
+      return;
+    }
+    if (!active || !currentHit) {
+      setHighlightedBlock(null);
+      return;
+    }
+
+    const bounds = parseBlockBounds(active.content);
+    const blockKey = bounds.findIndex(
+      (b) => b.lineStart <= currentHit.line && currentHit.line <= b.lineEnd,
+    );
+    if (blockKey >= 0) setHighlightedBlock(blockKey);
+    setSyncLine(currentHit.line);
+
+    if (sourceVisible) {
+      sourceRef.current?.scrollToLine(currentHit.line);
+      return;
+    }
+
+    let raf2 = 0;
+    const raf = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        const blockInfo = blockKey >= 0 ? blockEls.current.get(blockKey) : null;
+        const lineEl = lineEls.current.get(currentHit.line);
+        const reading = readingPaneRef.current;
+        const side = sideBodyRef.current;
+        syncingRef.current = true;
+        if (reading && blockInfo) centerOnEl(reading, blockInfo.el);
+        if (side && lineEl) centerOnEl(side, lineEl);
+        setTimeout(() => {
+          syncingRef.current = false;
+        }, 180);
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf);
+      cancelAnimationFrame(raf2);
+    };
+  }, [active, currentHit, searchOpen, searchQ, sourceVisible]);
+
   const closeTab = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     const next = tabs.filter((t) => t.id !== id);
@@ -1467,15 +1747,6 @@ function App() {
       console.error("Export PDF échoué :", err);
     }
   };
-
-  const hitCount = useMemo(() => {
-    if (!searchQ || !active) return 0;
-    const re = new RegExp(
-      searchQ.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-      "gi",
-    );
-    return (active.content.match(re) || []).length;
-  }, [searchQ, active]);
 
   return (
     <div
@@ -1534,7 +1805,13 @@ function App() {
           <button
             className={`icon-btn ${searchOpen ? "active" : ""}`}
             title="Rechercher ⌘F"
-            onClick={() => setSearchOpen(!searchOpen)}
+            onClick={() => {
+              if (searchOpen) closeSearch();
+              else {
+                syncActivePreviewContent();
+                setSearchOpen(true);
+              }
+            }}
           >
             <Icon.Search />
           </button>
@@ -1607,22 +1884,48 @@ function App() {
           <div className="search-overlay">
             <Icon.Search />
             <input
+              ref={searchInputRef}
               autoFocus
               placeholder="Rechercher dans le document…"
               value={searchQ}
-              onChange={(e) => setSearchQ(e.target.value)}
+              onChange={(e) => {
+                syncActivePreviewContent();
+                setSearchQ(e.target.value);
+              }}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                navigateSearch(e.shiftKey ? -1 : 1);
+              }}
             />
             <span className="count">
               {hitCount > 0
-                ? `${hitCount} résultats`
+                ? `${Math.min(currentHitIndex + 1, hitCount)} / ${hitCount}`
                 : searchQ
                   ? "aucun"
                   : ""}
             </span>
             <button
+              className="search-nav prev"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => navigateSearch(-1)}
+              disabled={!hitCount}
+              title="Résultat précédent"
+            >
+              <Icon.ChevronDown />
+            </button>
+            <button
+              className="search-nav"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => navigateSearch(1)}
+              disabled={!hitCount}
+              title="Résultat suivant"
+            >
+              <Icon.ChevronDown />
+            </button>
+            <button
               onClick={() => {
-                setSearchQ("");
-                setSearchOpen(false);
+                closeSearch();
               }}
               title="Fermer"
             >
@@ -1683,7 +1986,10 @@ function App() {
               content={active.content}
               search={searchQ}
               currentHit={currentHit}
-              onInput={() => markDirty(active.id)}
+              onInput={() => {
+                clearSideSourceDraft(active.id);
+                markDirty(active.id);
+              }}
             />
           </div>
         ) : (
@@ -1710,7 +2016,10 @@ function App() {
                       }}
                       initialContent={tab.content}
                       enabled={editMode && isActive}
-                      onInput={() => markDirty(tab.id)}
+                      onInput={() => {
+                        clearSideSourceDraft(tab.id);
+                        markDirty(tab.id);
+                      }}
                     />
                     {isActive && editMode && viewMode === "preview" && active && (
                       <div className="reading reading-blocks reading-blocks-overlay" aria-hidden="true">
@@ -1822,6 +2131,10 @@ function App() {
                       <SourceMini
                         content={sidePanel.block.sourceLines.join("\n")}
                         startLine={sidePanel.block.lineStart}
+                        search={searchQ}
+                        currentHit={currentHit}
+                        editable={editMode}
+                        onMarkdownChange={updateFromSideSource}
                       />
                     ) : (
                       <SourceMini
@@ -1831,6 +2144,10 @@ function App() {
                         currentSyncLine={syncLine}
                         lineToBlock={fullSourceLineToBlock}
                         highlightedBlock={highlightedBlock}
+                        search={searchQ}
+                        currentHit={currentHit}
+                        editable={editMode}
+                        onMarkdownChange={updateFromSideSource}
                         onJumpToBlock={jumpToBlock}
                       />
                     )}

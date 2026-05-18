@@ -1098,6 +1098,18 @@ button {
   padding: 18px 14px 32px 32px;
   margin: 0;
 }
+.source-mini.editable {
+  background: color-mix(in srgb, var(--surface-2) 38%, transparent);
+  cursor: text;
+}
+.source-mini.editable .src-content {
+  min-height: 1.75em;
+}
+.source-mini.editable:focus,
+.source-mini.editable:focus-within {
+  outline: 2px solid var(--accent-soft);
+  outline-offset: -2px;
+}
 .source-mini .src-line {
   grid-template-columns: 32px 24px 1fr;
 }
@@ -1916,7 +1928,7 @@ body.ctrl-held .reading a:hover {
   gap: 4px;
   padding: 4px 4px 4px 10px;
   z-index: 30;
-  width: 320px;
+  width: 376px;
 }
 .search-overlay input {
   flex: 1;
@@ -1945,10 +1957,22 @@ body.ctrl-held .reading a:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  cursor: pointer;
 }
 .search-overlay button:hover {
   background: var(--surface-2);
   color: var(--text);
+}
+.search-overlay button:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+.search-overlay button:disabled:hover {
+  background: transparent;
+  color: var(--muted);
+}
+.search-overlay .search-nav.prev svg {
+  transform: rotate(180deg);
 }
 .search-overlay svg {
   width: 12px;
