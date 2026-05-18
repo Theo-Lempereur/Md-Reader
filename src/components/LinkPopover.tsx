@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Icon } from "./Icons";
 
 type Props = {
   anchor: HTMLAnchorElement | null;
@@ -62,25 +61,25 @@ export function LinkPopover({ anchor, onEdit, onRemove }: Props) {
       style={style}
       onMouseDown={(e) => e.preventDefault()}
     >
-      <span className="link-popover-url" title={url}>
+      <div className="link-popover-title">Lien</div>
+      <a
+        className="link-popover-url"
+        href={url || undefined}
+        title={url}
+        target="_blank"
+        rel="noreferrer"
+        onClick={(e) => e.preventDefault()}
+      >
         {url || "(sans URL)"}
-      </span>
-      <button
-        type="button"
-        className="link-popover-btn"
-        title="Modifier le lien"
-        onClick={onEdit}
-      >
-        <Icon.Pencil />
-      </button>
-      <button
-        type="button"
-        className="link-popover-btn"
-        title="Retirer le lien"
-        onClick={onRemove}
-      >
-        <Icon.LinkOff />
-      </button>
+      </a>
+      <div className="link-popover-actions">
+        <button type="button" onClick={onRemove}>
+          Retirer
+        </button>
+        <button type="button" className="primary" onClick={onEdit}>
+          Modifier
+        </button>
+      </div>
     </div>
   );
 }

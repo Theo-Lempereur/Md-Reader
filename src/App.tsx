@@ -53,7 +53,9 @@ import {
 } from "./components/Tweaks";
 import { FileMenu } from "./components/FileMenu";
 import { PdfExportModal } from "./components/PdfExportModal";
+import { ConfirmModal } from "./components/ConfirmModal";
 import { WindowControls } from "./components/WindowControls";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   basename,
   exportEmbeddedMarkdownDialog,
@@ -496,6 +498,16 @@ function App() {
   const [viewMode, setViewMode] = useState<ViewMode>("preview");
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const [pdfModalOpen, setPdfModalOpen] = useState(false);
+  /** Onglet en attente de confirmation de fermeture (dirty). */
+  const [closeTabConfirm, setCloseTabConfirm] = useState<string | null>(null);
+  /** Onglets dirty au moment d'une tentative de fermeture de l'app. */
+  const [appCloseConfirm, setAppCloseConfirm] = useState<MdFile[] | null>(null);
+  /** Export en attente d'une confirmation (onglet dirty). */
+  const [exportConfirm, setExportConfirm] = useState<
+    | { kind: "md" }
+    | { kind: "pdf"; opts: { format: Tweaks["pdfPageFormat"]; colorMode: Tweaks["pdfColorMode"] } }
+    | null
+  >(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const updater = useUpdater();
   const [searchQ, setSearchQ] = useState("");
@@ -528,6 +540,8 @@ function App() {
   );
   const sourceRef = useRef<SourceViewHandle | null>(null);
   const sourceScrollerRef = useRef<HTMLDivElement | null>(null);
+  /** Désinscrit le listener Tauri onCloseRequested pour permettre la fermeture sans popup. */
+  const closeListenerUnlistenRef = useRef<(() => void) | null>(null);
 
   const active = tabs.find((t) => t.id === activeId) || tabs[0];
   const sourceVisible = !!active && editMode && viewMode === "source";
@@ -858,6 +872,31 @@ function App() {
       window.removeEventListener("pagehide", flush);
     };
   }, [activeId, sourceVisible, captureUiState, recentPaths]);
+
+  // Intercepte toutes les fermetures de fenêtre (bouton custom, Alt+F4, etc.) :
+  // si des onglets sont dirty, on affiche un popup au lieu de quitter.
+  useEffect(() => {
+    let cancelled = false;
+    getCurrentWindow()
+      .onCloseRequested((event) => {
+        const dirty = tabsRef.current.filter((t) => t.dirty);
+        if (dirty.length === 0) return;
+        event.preventDefault();
+        setAppCloseConfirm(dirty);
+      })
+      .then((fn) => {
+        if (cancelled) fn();
+        else closeListenerUnlistenRef.current = fn;
+      })
+      .catch((err) =>
+        console.error("Enregistrement onCloseRequested échoué:", err),
+      );
+    return () => {
+      cancelled = true;
+      closeListenerUnlistenRef.current?.();
+      closeListenerUnlistenRef.current = null;
+    };
+  }, []);
 
   // Capture en continu (caret + scroll) pendant que l'utilisateur travaille.
   // Cheap : on écrit dans la ref uniquement, sans re-render.
@@ -1321,7 +1360,7 @@ function App() {
     };
   }, []);
 
-  const handleExportEmbeddedMd = useCallback(async () => {
+  const performExportMd = useCallback(async () => {
     const md = getActiveMarkdown();
     if (md == null) return;
     const tab = tabs.find((t) => t.id === activeId);
@@ -1333,6 +1372,15 @@ function App() {
       console.error("Export embarqué échoué:", err);
     }
   }, [activeId, tabs, getActiveMarkdown]);
+
+  const handleExportEmbeddedMd = useCallback(async () => {
+    const tab = tabs.find((t) => t.id === activeId);
+    if (tab?.dirty) {
+      setExportConfirm({ kind: "md" });
+      return;
+    }
+    await performExportMd();
+  }, [activeId, tabs, performExportMd]);
 
   const handleSaveAs = useCallback(async () => {
     const md = getActiveMarkdown();
@@ -1723,12 +1771,35 @@ function App() {
     };
   }, [active, currentHit, searchOpen, searchQ, sourceVisible]);
 
-  const closeTab = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const next = tabs.filter((t) => t.id !== id);
+  const performCloseTab = (id: string) => {
+    const next = tabsRef.current.filter((t) => t.id !== id);
     wysiwygHandles.current.delete(id);
     setTabs(next);
     if (activeId === id) setActiveId(next.length ? next[0].id : "");
+  };
+
+  const closeTab = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const tab = tabsRef.current.find((t) => t.id === id);
+    if (tab?.dirty) {
+      setCloseTabConfirm(id);
+      return;
+    }
+    performCloseTab(id);
+  };
+
+  const performExportPdf = async (opts: {
+    format: Tweaks["pdfPageFormat"];
+    colorMode: Tweaks["pdfColorMode"];
+  }) => {
+    setEditMode(false);
+    await new Promise((r) => setTimeout(r, 80));
+    const suggested = active?.name ?? "document.md";
+    try {
+      await exportPdfDialog(suggested, opts);
+    } catch (err) {
+      console.error("Export PDF échoué :", err);
+    }
   };
 
   const handlePdfExport = async (opts: {
@@ -1738,14 +1809,11 @@ function App() {
     setTweak("pdfPageFormat", opts.format);
     setTweak("pdfColorMode", opts.colorMode);
     setPdfModalOpen(false);
-    setEditMode(false);
-    await new Promise((r) => setTimeout(r, 80));
-    const suggested = active?.name ?? "document.md";
-    try {
-      await exportPdfDialog(suggested, opts);
-    } catch (err) {
-      console.error("Export PDF échoué :", err);
+    if (active?.dirty) {
+      setExportConfirm({ kind: "pdf", opts });
+      return;
     }
+    await performExportPdf(opts);
   };
 
   return (
@@ -2277,6 +2345,81 @@ function App() {
           initialColorMode={tweaks.pdfColorMode}
           onCancel={() => setPdfModalOpen(false)}
           onConfirm={handlePdfExport}
+        />
+      )}
+
+      {closeTabConfirm !== null && (() => {
+        const tab = tabsRef.current.find((t) => t.id === closeTabConfirm);
+        const name = tab?.name ?? "ce fichier";
+        return (
+          <ConfirmModal
+            title="Modifications non sauvegardées"
+            message={
+              <p>
+                «&nbsp;<strong>{name}</strong>&nbsp;» contient des modifications
+                non sauvegardées. Fermer cet onglet va les perdre. Continuer ?
+              </p>
+            }
+            confirmLabel="Fermer sans sauver"
+            cancelLabel="Annuler"
+            variant="danger"
+            onConfirm={() => {
+              const id = closeTabConfirm;
+              setCloseTabConfirm(null);
+              performCloseTab(id);
+            }}
+            onCancel={() => setCloseTabConfirm(null)}
+          />
+        );
+      })()}
+
+      {appCloseConfirm !== null && (
+        <ConfirmModal
+          title="Quitter sans sauvegarder ?"
+          message={
+            <>
+              <p>
+                Les onglets suivants ont des modifications non sauvegardées :
+              </p>
+              <ul>
+                {appCloseConfirm.map((t) => (
+                  <li key={t.id}>{t.name}</li>
+                ))}
+              </ul>
+              <p>Quitter va les perdre.</p>
+            </>
+          }
+          confirmLabel="Quitter"
+          cancelLabel="Annuler"
+          variant="danger"
+          onConfirm={() => {
+            setAppCloseConfirm(null);
+            void getCurrentWindow().destroy();
+          }}
+          onCancel={() => setAppCloseConfirm(null)}
+        />
+      )}
+
+      {exportConfirm !== null && (
+        <ConfirmModal
+          title="Modifications non sauvegardées"
+          message={
+            <p>
+              Ce fichier contient des modifications non sauvegardées. La version
+              exportée correspondra à l'état actuel de l'éditeur, qui peut
+              différer du fichier sur disque. Continuer ?
+            </p>
+          }
+          confirmLabel="Exporter quand même"
+          cancelLabel="Annuler"
+          variant="warning"
+          onConfirm={() => {
+            const c = exportConfirm;
+            setExportConfirm(null);
+            if (c.kind === "md") void performExportMd();
+            else void performExportPdf(c.opts);
+          }}
+          onCancel={() => setExportConfirm(null)}
         />
       )}
     </div>

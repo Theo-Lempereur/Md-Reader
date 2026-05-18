@@ -1258,50 +1258,68 @@ body.ctrl-held .reading a:hover {
   text-decoration-color: var(--accent);
 }
 
-/* Popover d'édition de lien (au-dessus du <a> sélectionné) */
+/* Popover d'édition de lien (au-dessus du <a> sélectionné).
+   Style aligné sur .slash-menu-form (formulaire d'insertion de tableau). */
 .link-popover {
   position: fixed;
   z-index: 1000;
   display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 6px 4px 10px;
-  background: var(--panel, #2a2a2a);
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
-  border-radius: 6px;
-  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.35);
-  font-size: 12px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 8px 6px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-2);
+  font-size: 13px;
+  min-width: 240px;
   max-width: 360px;
-  color: var(--text, #ddd);
+  color: var(--text);
+}
+.link-popover-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 .link-popover-url {
-  max-width: 220px;
+  display: block;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
   color: var(--accent);
-  text-decoration: underline;
-  text-decoration-color: var(--accent-soft);
+  text-decoration: none;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  cursor: default;
 }
-.link-popover-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
+.link-popover-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.link-popover-actions button {
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
   background: transparent;
-  border: none;
-  border-radius: 4px;
-  color: inherit;
+  color: var(--text);
+  font-size: 12px;
   cursor: pointer;
 }
-.link-popover-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+.link-popover-actions button:hover {
+  background: var(--surface-2);
 }
-.link-popover-btn svg {
-  width: 14px;
-  height: 14px;
+.link-popover-actions button.primary {
+  background: var(--accent, var(--text));
+  color: var(--surface);
+  border-color: transparent;
 }
 
 /* Variantes pour le formulaire de lien dans le SlashMenu */
@@ -2732,4 +2750,39 @@ body.is-exporting-pdf * {
 }
 .pdf-btn.primary:hover {
   filter: brightness(1.1);
+}
+.pdf-btn.primary.danger {
+  background: #b91c1c;
+  border-color: #b91c1c;
+  color: #ffffff;
+}
+.pdf-btn.primary.danger:hover {
+  background: #991b1b;
+  border-color: #991b1b;
+  filter: none;
+}
+
+.confirm-modal-body {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+  padding: 16px 20px 12px;
+}
+.confirm-modal-body p {
+  margin: 0 0 8px;
+}
+.confirm-modal-body p:last-child {
+  margin-bottom: 0;
+}
+.confirm-modal-body ul {
+  margin: 6px 0 10px;
+  padding-left: 20px;
+  color: var(--text-2);
+}
+.confirm-modal-body li {
+  margin: 2px 0;
+}
+.confirm-modal-body strong {
+  color: var(--text);
+  font-weight: 600;
 }
