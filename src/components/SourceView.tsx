@@ -7,12 +7,17 @@ import {
 } from "react";
 import { normalizeMarkdown } from "../markdown/normalize";
 import { highlightSearch, marginIcon, tokenizeLine } from "../markdown/source";
-import type { SearchHit } from "../types";
+import type { SearchHit, SourceCaret } from "../types";
 import type { ToolbarAction } from "./Toolbar";
 
 export type SourceViewHandle = {
   executeCommand: (action: ToolbarAction) => void;
   getMarkdown: () => string;
+  getCaret: () => SourceCaret | null;
+  setCaret: (c: SourceCaret) => void;
+  getScrollTop: () => number;
+  setScrollTop: (top: number) => void;
+  focus: () => void;
 };
 
 type Props = {
@@ -41,6 +46,14 @@ export const SourceView = forwardRef<SourceViewHandle, Props>(
           ).map((el) => (el.textContent || "").replace(/​/g, ""));
           return normalizeMarkdown(lines.join("\n"));
         },
+        getCaret: () => readSourceCaret(rootRef.current),
+        setCaret: (c) => writeSourceCaret(rootRef.current, c),
+        getScrollTop: () => rootRef.current?.parentElement?.scrollTop ?? 0,
+        setScrollTop: (top) => {
+          const scroller = rootRef.current?.parentElement;
+          if (scroller) scroller.scrollTop = top;
+        },
+        focus: () => rootRef.current?.focus(),
       }),
       [content, onInput],
     );
@@ -338,4 +351,79 @@ function moveCaretToLineEnd(): boolean {
   if (!content) return false;
   placeCaretAtEnd(content);
   return true;
+}
+
+function readSourceCaret(root: HTMLDivElement | null): SourceCaret | null {
+  if (!root) return null;
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return null;
+  const range = sel.getRangeAt(0);
+  if (!root.contains(range.startContainer)) return null;
+  const content = findSrcContent(range.startContainer);
+  if (!content) return null;
+  const line = content.parentElement;
+  if (!(line instanceof HTMLDivElement)) return null;
+  const lines = Array.from(root.children).filter(
+    (el): el is HTMLDivElement =>
+      el instanceof HTMLDivElement && el.classList.contains("src-line"),
+  );
+  const lineIndex = lines.indexOf(line);
+  if (lineIndex < 0) return null;
+  // Colonne en caractères : longueur de texte de .src-content avant le caret.
+  const before = document.createRange();
+  before.selectNodeContents(content);
+  before.setEnd(range.startContainer, range.startOffset);
+  const column = (before.toString() || "").replace(/​/g, "").length;
+  return { line: lineIndex, column };
+}
+
+function writeSourceCaret(
+  root: HTMLDivElement | null,
+  caret: SourceCaret,
+): void {
+  if (!root) return;
+  const lines = Array.from(root.children).filter(
+    (el): el is HTMLDivElement =>
+      el instanceof HTMLDivElement && el.classList.contains("src-line"),
+  );
+  if (!lines.length) return;
+  const line = lines[Math.max(0, Math.min(caret.line, lines.length - 1))];
+  const content = line.querySelector<HTMLDivElement>(".src-content");
+  if (!content) return;
+  // Trouver le node texte cible + offset local pour caret.column caractères "réels".
+  const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+  let remaining = caret.column;
+  let targetNode: Text | null = null;
+  let targetOffset = 0;
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text;
+    const text = (node.data || "").replace(/​/g, "");
+    if (remaining <= text.length) {
+      // Trouver l'offset réel (en comptant les ZWSP).
+      let realOffset = 0;
+      let counted = 0;
+      const raw = node.data || "";
+      while (realOffset < raw.length && counted < remaining) {
+        if (raw[realOffset] !== "​") counted++;
+        realOffset++;
+      }
+      targetNode = node;
+      targetOffset = realOffset;
+      break;
+    }
+    remaining -= text.length;
+  }
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  if (targetNode) {
+    range.setStart(targetNode, targetOffset);
+  } else {
+    // Pas de texte ou offset hors limite → fin de ligne.
+    range.selectNodeContents(content);
+    range.collapse(false);
+  }
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
 }

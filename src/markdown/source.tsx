@@ -159,7 +159,7 @@ export function tokenizeLine(line: string, lineNum: number): ReactNode {
     return <>{parts}</>;
   }
   // Task list item
-  m = line.match(/^([-*])(\s+)\[([ xX])\](\s+)(.*)$/);
+  m = line.match(/^([-*])(\s+)\[([ xX])\](?:(\s+)(.*))?$/);
   if (m) {
     return (
       <>
@@ -173,8 +173,8 @@ export function tokenizeLine(line: string, lineNum: number): ReactNode {
         >
           [{m[3]}]
         </span>
-        <span>{m[4]}</span>
-        {inlineTokens(m[5], baseKey)}
+        {m[4] ? <span>{m[4]}</span> : null}
+        {inlineTokens(m[5] ?? "", baseKey)}
       </>
     );
   }

@@ -13,6 +13,7 @@ export type BlockInfo = {
 export type BlockRenderOpts = {
   onInspect: (block: BlockInfo) => void;
   onOpenFull: (block: BlockInfo) => void;
+  onTaskToggle?: (lineIndex: number, checked: boolean) => void;
   selectedBlockKey: number | null;
   inspectMode: "block" | "full" | null;
   /** Bloc surligné des deux côtés (preview + source) après un saut. */
@@ -25,6 +26,10 @@ export type BlockRenderOpts = {
 type InlineMathSegment =
   | { type: "text"; value: string }
   | { type: "math"; value: string };
+
+type MarkdownRenderOpts = {
+  onTaskToggle?: (lineIndex: number, checked: boolean) => void;
+};
 
 function normalizeTex(tex: string): string {
   return tex
@@ -104,51 +109,136 @@ function splitInlineMath(text: string): InlineMathSegment[] {
   return segments;
 }
 
+const ESCAPABLE = /[\\`*_{}\[\]()#+\-.!|~<>]/;
+
+function findClosing(
+  s: string,
+  start: number,
+  marker: string,
+  respectEscapes: boolean,
+): number {
+  const len = marker.length;
+  for (let i = start; i <= s.length - len; i++) {
+    if (respectEscapes && s[i] === "\\" && i + 1 < s.length) {
+      i++;
+      continue;
+    }
+    if (s[i] === "\n") return -1;
+    if (s.startsWith(marker, i)) return i;
+  }
+  return -1;
+}
+
 export function inlineRender(text: string): ReactNode[] {
   const out: ReactNode[] = [];
-  const re =
-    /(\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\n]+\)|~~[^~\n]+~~)/g;
-  let i = 0;
+  let key = 0;
 
   for (const segment of splitInlineMath(text)) {
     if (segment.type === "math") {
-      out.push(renderMath(segment.value, false, i++));
+      out.push(renderMath(segment.value, false, key++));
       continue;
     }
 
-    let last = 0;
-    let m: RegExpExecArray | null;
-    re.lastIndex = 0;
-    while ((m = re.exec(segment.value))) {
-      if (m.index > last) out.push(segment.value.slice(last, m.index));
-      const tok = m[0];
-      if (tok.startsWith("**")) {
-        out.push(<strong key={i++}>{tok.slice(2, -2)}</strong>);
-      } else if (tok.startsWith("~~")) {
-        out.push(<del key={i++}>{tok.slice(2, -2)}</del>);
-      } else if (tok.startsWith("*")) {
-        out.push(<em key={i++}>{tok.slice(1, -1)}</em>);
-      } else if (tok.startsWith("`")) {
-        out.push(<code key={i++}>{tok.slice(1, -1)}</code>);
-      } else if (tok.startsWith("[")) {
-        const lm = tok.match(/\[([^\]]+)\]\(([^)\n]+)\)/);
-        if (lm) {
+    const s = segment.value;
+    let buf = "";
+    let p = 0;
+    const flush = () => {
+      if (buf) {
+        out.push(buf);
+        buf = "";
+      }
+    };
+
+    while (p < s.length) {
+      const c = s[p];
+
+      // Échappement Markdown : `\X` → `X` littéral.
+      if (c === "\\" && p + 1 < s.length && ESCAPABLE.test(s[p + 1])) {
+        buf += s[p + 1];
+        p += 2;
+        continue;
+      }
+
+      if (c === "*" && s[p + 1] === "*") {
+        const end = findClosing(s, p + 2, "**", true);
+        if (end !== -1 && end > p + 2) {
+          flush();
           out.push(
-            <a key={i++} href={lm[2]} onClick={(e) => e.preventDefault()}>
-              {lm[1]}
-            </a>,
+            <strong key={key++}>{inlineRender(s.slice(p + 2, end))}</strong>,
           );
+          p = end + 2;
+          continue;
         }
       }
-      last = m.index + tok.length;
+
+      if (c === "~" && s[p + 1] === "~") {
+        const end = findClosing(s, p + 2, "~~", true);
+        if (end !== -1 && end > p + 2) {
+          flush();
+          out.push(<del key={key++}>{inlineRender(s.slice(p + 2, end))}</del>);
+          p = end + 2;
+          continue;
+        }
+      }
+
+      if (c === "*") {
+        const end = findClosing(s, p + 1, "*", true);
+        if (end !== -1 && end > p + 1) {
+          flush();
+          out.push(<em key={key++}>{inlineRender(s.slice(p + 1, end))}</em>);
+          p = end + 1;
+          continue;
+        }
+      }
+
+      if (c === "`") {
+        const end = findClosing(s, p + 1, "`", false);
+        if (end !== -1 && end > p + 1) {
+          flush();
+          out.push(<code key={key++}>{s.slice(p + 1, end)}</code>);
+          p = end + 1;
+          continue;
+        }
+      }
+
+      if (c === "[") {
+        const closeBracket = findClosing(s, p + 1, "]", true);
+        if (
+          closeBracket !== -1 &&
+          closeBracket > p + 1 &&
+          s[closeBracket + 1] === "("
+        ) {
+          const closeParen = findClosing(s, closeBracket + 2, ")", true);
+          if (closeParen !== -1) {
+            flush();
+            const linkText = s.slice(p + 1, closeBracket);
+            const url = s.slice(closeBracket + 2, closeParen);
+            out.push(
+              <a
+                key={key++}
+                href={url}
+                onClick={(e) => e.preventDefault()}
+              >
+                {inlineRender(linkText)}
+              </a>,
+            );
+            p = closeParen + 1;
+            continue;
+          }
+        }
+      }
+
+      buf += c;
+      p++;
     }
-    if (last < segment.value.length) out.push(segment.value.slice(last));
+
+    flush();
   }
 
   return out;
 }
 
-type ListItem = { task: boolean; done?: boolean; text: string };
+type ListItem = { task: boolean; done?: boolean; text: string; lineIndex: number };
 type TableAlign = "left" | "center" | "right" | null;
 type MarkdownTable = {
   headers: string[];
@@ -252,7 +342,10 @@ function tableAlignStyle(align: TableAlign): CSSProperties | undefined {
   return align ? { textAlign: align } : undefined;
 }
 
-export function renderMarkdown(md: string): ReactNode[] {
+export function renderMarkdown(
+  md: string,
+  opts: MarkdownRenderOpts = {},
+): ReactNode[] {
   const lines = md.split("\n");
   const blocks: ReactNode[] = [];
   let i = 0;
@@ -425,16 +518,18 @@ export function renderMarkdown(md: string): ReactNode[] {
     if (/^[-*]\s/.test(line)) {
       const items: ListItem[] = [];
       while (i < lines.length && /^[-*]\s/.test(lines[i])) {
+        const lineIndex = i;
         const txt = lines[i].replace(/^[-*]\s+/, "");
-        const tm = txt.match(/^\[([ xX])\]\s+(.*)$/);
+        const tm = txt.match(/^\[([ xX])\](?:\s+(.*))?$/);
         if (tm) {
           items.push({
             task: true,
             done: tm[1].toLowerCase() === "x",
-            text: tm[2],
+            text: tm[2] ?? "",
+            lineIndex,
           });
         } else {
-          items.push({ task: false, text: txt });
+          items.push({ task: false, text: txt, lineIndex });
         }
         i++;
       }
@@ -446,7 +541,15 @@ export function renderMarkdown(md: string): ReactNode[] {
               className={it.task ? `task-li ${it.done ? "done" : ""}` : ""}
             >
               {it.task && (
-                <input type="checkbox" checked={!!it.done} readOnly />
+                <input
+                  type="checkbox"
+                  checked={!!it.done}
+                  readOnly={!opts.onTaskToggle}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) =>
+                    opts.onTaskToggle?.(it.lineIndex, e.currentTarget.checked)
+                  }
+                />
               )}
               <span>{inlineRender(it.text)}</span>
             </li>
@@ -605,7 +708,9 @@ export function renderMarkdownBlocks(
   md: string,
   opts: BlockRenderOpts,
 ): ReactNode[] {
-  const rendered = renderMarkdown(md);
+  const rendered = renderMarkdown(md, {
+    onTaskToggle: opts.onTaskToggle,
+  });
   const bounds = parseBlockBounds(md);
   const lines = md.split("\n");
 

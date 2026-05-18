@@ -27,7 +27,7 @@ export type Tweaks = {
   tabStyle: TabStyle;
   toolbarPos: ToolbarPos;
   autoSave: boolean;
-  /** Largeur de la zone de texte, en pourcentage de la largeur visible. */
+  /** Largeur fixe de la zone de texte, en pixels. */
   textWidth: number;
   /** Synchronisation du scroll entre la preview et la source latérale. */
   syncScroll: boolean;
@@ -40,4 +40,27 @@ export type Tweaks = {
 export type SearchHit = {
   line: number;
   start: number;
+};
+
+/** Position du caret dans la vue Source (ligne 0-indexée, colonne en caractères). */
+export type SourceCaret = { line: number; column: number };
+
+/** Position du caret dans le WYSIWYG, exprimée en offset textuel cumulé depuis la racine. */
+export type PreviewCaret = { offset: number };
+
+/** État UI mémorisé par fichier, séparé pour chaque vue. */
+export type PersistedUiState = {
+  source?: { caret?: SourceCaret; scrollTop?: number };
+  preview?: { caret?: PreviewCaret; scrollTop?: number };
+};
+
+/** Forme persistée de la session (localStorage + Tauri store). */
+export type PersistedSession = {
+  openPaths: string[];
+  activePath: string | null;
+  perFile: Record<string, PersistedUiState>;
+  /** Historique des fichiers ouverts, plus récent en tête, max 10 entrées. */
+  recentPaths: string[];
+  /** Vrai dès qu'on a affiché l'onglet Bienvenue au premier lancement. */
+  firstRunDone: boolean;
 };

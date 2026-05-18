@@ -26,6 +26,64 @@ async fn write_text_file(path: String, content: String) -> Result<(), String> {
     std::fs::write(&path, content).map_err(|e| e.to_string())
 }
 
+fn tweaks_file_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("app_config_dir: {}", e))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create settings dir: {}", e))?;
+    Ok(dir.join("tweaks.json"))
+}
+
+#[tauri::command]
+async fn read_tweaks(app: tauri::AppHandle) -> Result<Option<serde_json::Value>, String> {
+    let path = tweaks_file_path(&app)?;
+    match std::fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str(&content)
+            .map(Some)
+            .map_err(|e| format!("read tweaks json: {}", e)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("read tweaks file: {}", e)),
+    }
+}
+
+#[tauri::command]
+async fn write_tweaks(app: tauri::AppHandle, tweaks: serde_json::Value) -> Result<(), String> {
+    let path = tweaks_file_path(&app)?;
+    let content =
+        serde_json::to_string_pretty(&tweaks).map_err(|e| format!("write tweaks json: {}", e))?;
+    std::fs::write(path, content).map_err(|e| format!("write tweaks file: {}", e))
+}
+
+fn session_file_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("app_config_dir: {}", e))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create settings dir: {}", e))?;
+    Ok(dir.join("session.json"))
+}
+
+#[tauri::command]
+async fn read_session(app: tauri::AppHandle) -> Result<Option<serde_json::Value>, String> {
+    let path = session_file_path(&app)?;
+    match std::fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str(&content)
+            .map(Some)
+            .map_err(|e| format!("read session json: {}", e)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("read session file: {}", e)),
+    }
+}
+
+#[tauri::command]
+async fn write_session(app: tauri::AppHandle, session: serde_json::Value) -> Result<(), String> {
+    let path = session_file_path(&app)?;
+    let content =
+        serde_json::to_string_pretty(&session).map_err(|e| format!("write session json: {}", e))?;
+    std::fs::write(path, content).map_err(|e| format!("write session file: {}", e))
+}
+
 #[cfg(windows)]
 mod pdf_export {
     use std::sync::{Arc, Mutex};
@@ -385,6 +443,10 @@ pub fn run() {
             greet,
             read_text_file,
             write_text_file,
+            read_tweaks,
+            write_tweaks,
+            read_session,
+            write_session,
             export_pdf
         ])
         .run(tauri::generate_context!())

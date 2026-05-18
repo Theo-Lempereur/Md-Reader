@@ -1,4 +1,5 @@
 import { Icon } from "./Icons";
+import { basename } from "../lib/fileIo";
 
 type Props = {
   open: boolean;
@@ -8,6 +9,8 @@ type Props = {
   onSave: () => void;
   onSaveAs: () => void;
   onExportPdf: () => void;
+  recents: string[];
+  onOpenRecent: (path: string) => void;
 };
 
 export function FileMenu({
@@ -18,6 +21,8 @@ export function FileMenu({
   onSave,
   onSaveAs,
   onExportPdf,
+  recents,
+  onOpenRecent,
 }: Props) {
   const run = (fn: () => void) => () => {
     setOpen(false);
@@ -50,6 +55,26 @@ export function FileMenu({
             Ouvrir…
             <span className="kbd">⌘O</span>
           </button>
+          {recents.length > 0 && (
+            <>
+              <div className="file-menu-section">Récents</div>
+              {recents.map((path) => (
+                <button
+                  key={path}
+                  className="file-menu-recent"
+                  title={path}
+                  onClick={run(() => onOpenRecent(path))}
+                >
+                  <span className="menu-icon">
+                    <Icon.FileText />
+                  </span>
+                  <span className="file-menu-recent-name">
+                    {basename(path)}
+                  </span>
+                </button>
+              ))}
+            </>
+          )}
           <hr />
           <button onClick={run(onSave)}>
             <span className="menu-icon">

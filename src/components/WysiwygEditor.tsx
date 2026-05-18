@@ -13,6 +13,7 @@ import { runWysiwygCommand } from "../slash/runners";
 import { useSlashCommand } from "../slash/useSlashCommand";
 import { SlashMenu } from "./SlashMenu";
 import type { ToolbarAction } from "./Toolbar";
+import type { PreviewCaret } from "../types";
 
 export type WysiwygEditorHandle = {
   executeCommand: (action: ToolbarAction) => void;
@@ -21,6 +22,8 @@ export type WysiwygEditorHandle = {
   /** Réécrit le DOM à partir d'un markdown — utilisé après un flush externe
    * (ex. retour de la vue Source) pour resynchroniser l'éditeur WYSIWYG. */
   refreshFromContent: (content: string) => void;
+  getCaret: () => PreviewCaret | null;
+  setCaret: (c: PreviewCaret) => void;
 };
 
 type Props = {
@@ -60,6 +63,25 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
       return () => el.removeEventListener("input", handler);
     }, [onInput]);
 
+    useEffect(() => {
+      const el = divRef.current;
+      if (!el || !enabled) return;
+      const handler = (event: Event) => {
+        const input = event.target;
+        if (!(input instanceof HTMLInputElement)) return;
+        if (input.type !== "checkbox") return;
+        const li = input.closest("li.task-li");
+        if (!li || !el.contains(li)) return;
+
+        li.classList.toggle("done", input.checked);
+        if (input.checked) input.setAttribute("checked", "");
+        else input.removeAttribute("checked");
+        onInput?.();
+      };
+      el.addEventListener("change", handler);
+      return () => el.removeEventListener("change", handler);
+    }, [enabled, onInput]);
+
     // Double-clic sur une formule rendue → ré-ouvre l'édition.
     useEffect(() => {
       const el = divRef.current;
@@ -89,6 +111,8 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
             <>{renderMarkdown(normalizedContent)}</>,
           );
         },
+        getCaret: () => readPreviewCaret(divRef.current),
+        setCaret: (c) => writePreviewCaret(divRef.current, c),
       }),
       [onInput],
     );
@@ -115,3 +139,80 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
     );
   },
 );
+
+function readPreviewCaret(root: HTMLDivElement | null): PreviewCaret | null {
+  if (!root) return null;
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return null;
+  const range = sel.getRangeAt(0);
+  if (!root.contains(range.startContainer)) return null;
+
+  // Offset textuel cumulé depuis le début de root jusqu'au caret.
+  let offset = 0;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode() as Text | null;
+  while (node) {
+    if (node === range.startContainer) {
+      offset += range.startOffset;
+      return { offset };
+    }
+    offset += node.data.length;
+    node = walker.nextNode() as Text | null;
+  }
+  // startContainer n'est pas un nœud texte : tomber sur l'offset accumulé jusqu'au container.
+  if (range.startContainer === root) {
+    let acc = 0;
+    for (let i = 0; i < range.startOffset && i < root.childNodes.length; i++) {
+      acc += textLengthOf(root.childNodes[i]);
+    }
+    return { offset: acc };
+  }
+  return { offset };
+}
+
+function writePreviewCaret(
+  root: HTMLDivElement | null,
+  caret: PreviewCaret,
+): void {
+  if (!root) return;
+  const sel = window.getSelection();
+  if (!sel) return;
+  let remaining = Math.max(0, caret.offset);
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode() as Text | null;
+  let target: Text | null = null;
+  let targetOffset = 0;
+  while (node) {
+    const len = node.data.length;
+    if (remaining <= len) {
+      target = node;
+      targetOffset = remaining;
+      break;
+    }
+    remaining -= len;
+    node = walker.nextNode() as Text | null;
+  }
+  const range = document.createRange();
+  if (target) {
+    range.setStart(target, targetOffset);
+  } else {
+    // Offset > texte total : poser le caret à la fin.
+    range.selectNodeContents(root);
+    range.collapse(false);
+  }
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+function textLengthOf(node: Node): number {
+  if (node.nodeType === Node.TEXT_NODE) return (node as Text).data.length;
+  let total = 0;
+  const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+  let n = walker.nextNode() as Text | null;
+  while (n) {
+    total += n.data.length;
+    n = walker.nextNode() as Text | null;
+  }
+  return total;
+}

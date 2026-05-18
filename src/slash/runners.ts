@@ -218,6 +218,58 @@ export function insertCodeFence(ctx: SlashCtx) {
   dispatchInput(ctx.editor);
 }
 
+/** Insère une tâche Markdown, vide ou déjà cochée, avec le caret dans son texte. */
+export function insertTaskCheckbox(ctx: SlashCtx, checked: boolean) {
+  clearTriggerText(ctx.editor, ctx.triggerNode, ctx.triggerOffset);
+
+  const li = document.createElement("li");
+  li.className = checked ? "task-li done" : "task-li";
+
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.checked = checked;
+  if (checked) input.setAttribute("checked", "");
+
+  const span = document.createElement("span");
+  const zwsp = document.createTextNode("​");
+  span.appendChild(zwsp);
+
+  li.appendChild(input);
+  li.appendChild(span);
+
+  const currentListItem = getCurrentListItem(ctx.editor);
+  const parentList = currentListItem?.parentElement;
+  if (currentListItem && parentList?.matches("ul, ol")) {
+    const text = (currentListItem.textContent ?? "").replace(/​/g, "").trim();
+    if (text) currentListItem.after(li);
+    else currentListItem.replaceWith(li);
+  } else {
+    const ul = document.createElement("ul");
+    ul.appendChild(li);
+    insertNodeAtCaret(ul);
+  }
+
+  const sel = window.getSelection();
+  if (sel) {
+    const r = document.createRange();
+    r.setStart(zwsp, 1);
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+  dispatchInput(ctx.editor);
+}
+
+function getCurrentListItem(editor: HTMLElement): HTMLLIElement | null {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return null;
+  const node = sel.getRangeAt(0).startContainer;
+  if (!editor.contains(node)) return null;
+  const start = node.nodeType === 1 ? (node as Element) : node.parentElement;
+  const li = start?.closest("li");
+  return li instanceof HTMLLIElement && editor.contains(li) ? li : null;
+}
+
 /** Insère un tableau standard avec une ligne d'en-tête + (rows-1) lignes. */
 export function insertTable(
   ctx: SlashCtx,

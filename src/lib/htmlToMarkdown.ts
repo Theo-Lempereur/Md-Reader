@@ -64,8 +64,8 @@ td.addRule("taskListItem", {
     // On retire le checkbox du contenu interne pour ne pas le re-imprimer
     const clone = li.cloneNode(true) as HTMLElement;
     clone.querySelector("input[type=checkbox]")?.remove();
-    const inner = td.turndown(clone.innerHTML).trim();
-    return `- [${checked}] ${inner}\n`;
+    const inner = td.turndown(clone.innerHTML).replace(/​/g, "").trim();
+    return inner ? `- [${checked}] ${inner}\n` : `- [${checked}]\n`;
   },
 });
 

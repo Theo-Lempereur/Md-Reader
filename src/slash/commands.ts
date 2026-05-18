@@ -5,6 +5,7 @@ import {
   clearBlockFormat,
   findTableContext,
   insertCodeFence,
+  insertTaskCheckbox,
   runMappedCommand,
   type SlashCtx,
 } from "./runners";
@@ -125,6 +126,30 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     hint: "1. ",
     group: "block",
     run: mapped("ol"),
+  },
+  {
+    id: "checkbox",
+    names: ["checkbox", "case", "casevide", "tache", "tâche", "todo"],
+    label: "Case à cocher",
+    hint: "- [ ]",
+    group: "block",
+    run: (ctx) => insertTaskCheckbox(ctx, false),
+  },
+  {
+    id: "checkbox-true",
+    names: [
+      "checkboxtrue",
+      "checkboxvrai",
+      "casecochee",
+      "casecochée",
+      "tachefaite",
+      "tâchefaite",
+      "fait",
+    ],
+    label: "Case cochée",
+    hint: "- [x]",
+    group: "block",
+    run: (ctx) => insertTaskCheckbox(ctx, true),
   },
   {
     id: "code-block",

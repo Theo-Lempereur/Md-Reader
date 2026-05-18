@@ -417,6 +417,24 @@ button {
   border-top: 1px solid var(--line);
   margin: 4px 0;
 }
+.file-menu-section {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  padding: 8px 10px 4px;
+  border-top: 1px solid var(--line);
+  margin-top: 4px;
+}
+.file-menu .file-menu-recent {
+  font-size: 13px;
+}
+.file-menu .file-menu-recent-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
 
 /* ============ Tabs (inside topbar) ============ */
 .tabs {
@@ -871,7 +889,9 @@ button {
 /* En mode "blocs pleine largeur" (lecture & overlay) : la zone hover couvre tout le volet,
    tandis que le contenu reste centré dans .md-block-inner avec sa propre largeur. */
 .reading-blocks {
+  width: 100%;
   max-width: none;
+  margin: 0;
   padding-left: 0;
   padding-right: 0;
 }
@@ -881,7 +901,7 @@ button {
 }
 .reading-blocks .md-block-inner {
   width: 100%;
-  max-width: var(--reading-width, 760px);
+  max-width: min(var(--reading-width, 760px), 80vw);
   padding: 0 var(--reading-pad-x, 48px);
   box-sizing: border-box;
 }
@@ -1089,12 +1109,18 @@ button {
   }
 }
 .reading {
-  max-width: var(--reading-width, 760px);
+  width: 100%;
+  max-width: min(var(--reading-width, 760px), 80vw);
   margin: 0 auto;
   padding: var(--reading-pad-y, 56px) var(--reading-pad-x, 48px);
   font-size: var(--body-size, 17px);
   line-height: var(--body-line, 1.7);
   color: var(--text);
+}
+.reading.reading-blocks {
+  max-width: none;
+  margin: 0;
+  padding: var(--reading-pad-y, 56px) 0;
 }
 
 .reading[contenteditable="true"] {
@@ -1326,6 +1352,7 @@ button {
 }
 .reading .task-li input {
   accent-color: var(--accent);
+  cursor: pointer;
   transform: translateY(1px);
 }
 .reading .task-li.done {
@@ -1749,6 +1776,113 @@ button {
   border-radius: 4px;
   color: var(--text-2);
   background: var(--surface);
+}
+/* État vide (aucun onglet ouvert) — riche : récents OU doc Bienvenue. */
+.welcome-empty {
+  overflow-y: auto;
+  color: var(--text);
+  text-align: left;
+}
+.welcome-empty-inner {
+  max-width: min(var(--reading-width, 760px), 80vw);
+  margin: 0 auto;
+  padding: 6vh 48px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+.welcome-recents h1 {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 16px;
+  letter-spacing: -0.015em;
+}
+.welcome-recents-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.welcome-recents-item {
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 10px 12px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: inherit;
+  transition: background 100ms, border-color 100ms;
+}
+.welcome-recents-item:hover {
+  background: var(--surface-2);
+  border-color: var(--line);
+}
+.welcome-recents-name {
+  font-size: 14px;
+  color: var(--text);
+  font-weight: 500;
+}
+.welcome-recents-path {
+  font-size: 11.5px;
+  color: var(--muted);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Le rendu de WELCOME_MD réutilise .reading — on supprime juste les
+ * paddings/margins qui dupliqueraient ceux du conteneur welcome-empty-inner. */
+.welcome-empty .welcome-doc.reading {
+  max-width: none;
+  padding: 0;
+  margin: 0;
+  width: 100%;
+}
+.welcome-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.welcome-btn {
+  appearance: none;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 9px 14px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+  font-size: 13px;
+  transition: background 100ms, border-color 100ms;
+}
+.welcome-btn:hover {
+  background: var(--surface-2);
+  border-color: var(--accent);
+}
+.welcome-btn svg {
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+.welcome-btn .kbd {
+  margin-left: 6px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  background: var(--surface-2);
 }
 
 /* ============ Tweaks panel ============ */

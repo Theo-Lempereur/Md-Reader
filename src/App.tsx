@@ -6,19 +6,21 @@ import {
   useState,
   type CSSProperties,
 } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import "katex/dist/katex.min.css";
 import "./App.css";
 
-import { SAMPLE_FILES } from "./data/sampleFiles";
 import {
   readTime,
   wordCount,
+  renderMarkdown,
   renderMarkdownBlocks,
   parseBlockBounds,
   type BlockInfo,
 } from "./markdown/render";
 import { normalizeMarkdown } from "./markdown/normalize";
+import { WELCOME_MD } from "./welcome";
 import { tokenizeLine, marginIcon } from "./markdown/source";
 import { Icon } from "./components/Icons";
 import { SourceView, type SourceViewHandle } from "./components/SourceView";
@@ -56,6 +58,8 @@ import type {
   FontVariant,
   MdFile,
   Palette,
+  PersistedSession,
+  PersistedUiState,
   SearchHit,
   TabStyle,
   Theme,
@@ -63,6 +67,15 @@ import type {
   Tweaks,
   ViewMode,
 } from "./types";
+
+const TEXT_WIDTH_MIN = 560;
+const TEXT_WIDTH_MAX = 3200;
+const TEXT_WIDTH_LEGACY_MIGRATION_MAX = 1040;
+const TEXT_WIDTH_VIEWPORT_RATIO = 0.8;
+const TEXT_WIDTH_WHEEL_STEP = 20;
+const TEXT_WIDTH_WHEEL_THRESHOLD = 60;
+const LEGACY_TEXT_WIDTH_MIN = 30;
+const LEGACY_TEXT_WIDTH_MAX = 100;
 
 const DEFAULT_TWEAKS: Tweaks = {
   theme: "light",
@@ -72,16 +85,11 @@ const DEFAULT_TWEAKS: Tweaks = {
   tabStyle: "pastille",
   toolbarPos: "floating",
   autoSave: false,
-  textWidth: 60,
+  textWidth: 760,
   syncScroll: true,
   pdfPageFormat: "a4",
   pdfColorMode: "bw",
 };
-
-const TEXT_WIDTH_MIN = 30;
-const TEXT_WIDTH_MAX = 100;
-const TEXT_WIDTH_WHEEL_STEP = 2;
-const TEXT_WIDTH_WHEEL_THRESHOLD = 60;
 
 const TWEAKS_STORAGE_KEY = "md-reader:tweaks";
 
@@ -116,6 +124,58 @@ function readStringTweak<K extends keyof typeof TWEAK_OPTIONS>(
   return isStringTweakValue(key, value) ? value : DEFAULT_TWEAKS[key];
 }
 
+function clampTextWidth(value: number): number {
+  return Math.min(TEXT_WIDTH_MAX, Math.max(TEXT_WIDTH_MIN, value));
+}
+
+function getViewportTextWidthMax(): number {
+  if (typeof window === "undefined") return TEXT_WIDTH_MAX;
+  const viewportMax =
+    Math.floor((window.innerWidth * TEXT_WIDTH_VIEWPORT_RATIO) / 10) * 10;
+  return Math.min(TEXT_WIDTH_MAX, Math.max(TEXT_WIDTH_MIN, viewportMax));
+}
+
+function normalizeTextWidth(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_TWEAKS.textWidth;
+  }
+
+  if (value >= TEXT_WIDTH_MIN && value <= TEXT_WIDTH_MAX) {
+    return clampTextWidth(value);
+  }
+
+  if (value >= LEGACY_TEXT_WIDTH_MIN && value <= LEGACY_TEXT_WIDTH_MAX) {
+    const ratio =
+      (value - LEGACY_TEXT_WIDTH_MIN) /
+      (LEGACY_TEXT_WIDTH_MAX - LEGACY_TEXT_WIDTH_MIN);
+    const migrated =
+      TEXT_WIDTH_MIN + ratio * (TEXT_WIDTH_LEGACY_MIGRATION_MAX - TEXT_WIDTH_MIN);
+    return Math.round(migrated / 10) * 10;
+  }
+
+  return DEFAULT_TWEAKS.textWidth;
+}
+
+function normalizeTweaks(value: unknown): Tweaks {
+  if (!value || typeof value !== "object") return DEFAULT_TWEAKS;
+
+  const s = value as Partial<Record<keyof Tweaks, unknown>>;
+  return {
+    theme: readStringTweak(s, "theme"),
+    palette: readStringTweak(s, "palette"),
+    font: readStringTweak(s, "font"),
+    density: readStringTweak(s, "density"),
+    tabStyle: readStringTweak(s, "tabStyle"),
+    toolbarPos: readStringTweak(s, "toolbarPos"),
+    autoSave: typeof s.autoSave === "boolean" ? s.autoSave : DEFAULT_TWEAKS.autoSave,
+    textWidth: normalizeTextWidth(s.textWidth),
+    syncScroll:
+      typeof s.syncScroll === "boolean" ? s.syncScroll : DEFAULT_TWEAKS.syncScroll,
+    pdfPageFormat: readStringTweak(s, "pdfPageFormat"),
+    pdfColorMode: readStringTweak(s, "pdfColorMode"),
+  };
+}
+
 function loadTweaks(): Tweaks {
   if (typeof window === "undefined") return DEFAULT_TWEAKS;
 
@@ -124,35 +184,127 @@ function loadTweaks(): Tweaks {
     if (!saved) return DEFAULT_TWEAKS;
 
     const parsed = JSON.parse(saved);
-    if (!parsed || typeof parsed !== "object") return DEFAULT_TWEAKS;
-
-    const s = parsed as Partial<Record<keyof Tweaks, unknown>>;
-    return {
-      theme: readStringTweak(s, "theme"),
-      palette: readStringTweak(s, "palette"),
-      font: readStringTweak(s, "font"),
-      density: readStringTweak(s, "density"),
-      tabStyle: readStringTweak(s, "tabStyle"),
-      toolbarPos: readStringTweak(s, "toolbarPos"),
-      autoSave: typeof s.autoSave === "boolean" ? s.autoSave : DEFAULT_TWEAKS.autoSave,
-      textWidth:
-        typeof s.textWidth === "number" &&
-        s.textWidth >= TEXT_WIDTH_MIN &&
-        s.textWidth <= TEXT_WIDTH_MAX
-          ? s.textWidth
-          : DEFAULT_TWEAKS.textWidth,
-      syncScroll:
-        typeof s.syncScroll === "boolean" ? s.syncScroll : DEFAULT_TWEAKS.syncScroll,
-      pdfPageFormat: readStringTweak(s, "pdfPageFormat"),
-      pdfColorMode: readStringTweak(s, "pdfColorMode"),
-    };
+    return normalizeTweaks(parsed);
   } catch {
     return DEFAULT_TWEAKS;
   }
 }
 
-function clampTextWidth(value: number): number {
-  return Math.min(TEXT_WIDTH_MAX, Math.max(TEXT_WIDTH_MIN, value));
+async function loadPersistedTweaks(): Promise<Tweaks | null> {
+  try {
+    const saved = await invoke<unknown | null>("read_tweaks");
+    return saved ? normalizeTweaks(saved) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function savePersistedTweaks(tweaks: Tweaks): Promise<void> {
+  try {
+    await invoke("write_tweaks", { tweaks });
+  } catch {
+    // Browser/dev fallback: localStorage already has the same data.
+  }
+}
+
+const SESSION_STORAGE_KEY = "md-reader:session";
+const MAX_RECENT_PATHS = 10;
+const WELCOME_TAB_ID = "welcome";
+const EMPTY_SESSION: PersistedSession = {
+  openPaths: [],
+  activePath: null,
+  perFile: {},
+  recentPaths: [],
+  firstRunDone: false,
+};
+
+function normalizeSession(value: unknown): PersistedSession {
+  if (!value || typeof value !== "object") return EMPTY_SESSION;
+  const s = value as Record<string, unknown>;
+  const openPaths = Array.isArray(s.openPaths)
+    ? s.openPaths.filter((p): p is string => typeof p === "string")
+    : [];
+  const activePath =
+    typeof s.activePath === "string" && openPaths.includes(s.activePath)
+      ? s.activePath
+      : null;
+  const rawPerFile =
+    s.perFile && typeof s.perFile === "object"
+      ? (s.perFile as Record<string, unknown>)
+      : {};
+  const perFile: Record<string, PersistedUiState> = {};
+  for (const [path, ui] of Object.entries(rawPerFile)) {
+    if (typeof path !== "string" || !ui || typeof ui !== "object") continue;
+    const entry = ui as Record<string, unknown>;
+    const result: PersistedUiState = {};
+    const src = entry.source as Record<string, unknown> | undefined;
+    if (src && typeof src === "object") {
+      const out: PersistedUiState["source"] = {};
+      const caret = src.caret as Record<string, unknown> | undefined;
+      if (
+        caret &&
+        typeof caret.line === "number" &&
+        typeof caret.column === "number"
+      ) {
+        out.caret = { line: caret.line, column: caret.column };
+      }
+      if (typeof src.scrollTop === "number") out.scrollTop = src.scrollTop;
+      if (out.caret || out.scrollTop != null) result.source = out;
+    }
+    const pv = entry.preview as Record<string, unknown> | undefined;
+    if (pv && typeof pv === "object") {
+      const out: PersistedUiState["preview"] = {};
+      const caret = pv.caret as Record<string, unknown> | undefined;
+      if (caret && typeof caret.offset === "number") {
+        out.caret = { offset: caret.offset };
+      }
+      if (typeof pv.scrollTop === "number") out.scrollTop = pv.scrollTop;
+      if (out.caret || out.scrollTop != null) result.preview = out;
+    }
+    if (result.source || result.preview) perFile[path] = result;
+  }
+  // Récents : dédup, clamp à MAX_RECENT_PATHS.
+  const rawRecent = Array.isArray(s.recentPaths)
+    ? s.recentPaths.filter((p): p is string => typeof p === "string")
+    : [];
+  const seen = new Set<string>();
+  const recentPaths: string[] = [];
+  for (const p of rawRecent) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    recentPaths.push(p);
+    if (recentPaths.length >= MAX_RECENT_PATHS) break;
+  }
+  const firstRunDone = s.firstRunDone === true;
+  return { openPaths, activePath, perFile, recentPaths, firstRunDone };
+}
+
+function loadSession(): PersistedSession {
+  if (typeof window === "undefined") return EMPTY_SESSION;
+  try {
+    const saved = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!saved) return EMPTY_SESSION;
+    return normalizeSession(JSON.parse(saved));
+  } catch {
+    return EMPTY_SESSION;
+  }
+}
+
+async function loadPersistedSession(): Promise<PersistedSession | null> {
+  try {
+    const saved = await invoke<unknown | null>("read_session");
+    return saved ? normalizeSession(saved) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function savePersistedSession(session: PersistedSession): Promise<void> {
+  try {
+    await invoke("write_session", { session });
+  } catch {
+    // localStorage fait office de fallback.
+  }
 }
 
 type SidePanel =
@@ -246,12 +398,21 @@ function App() {
   const [tweaks, setTweaks] = useState<Tweaks>(loadTweaks);
   const setTweak = <K extends keyof Tweaks>(key: K, value: Tweaks[K]) =>
     setTweaks((t) => ({ ...t, [key]: value }));
+  const persistedTweaksReadyRef = useRef(false);
+  const lastSavedTweaksRef = useRef<string | null>(null);
+  const [textWidthMax, setTextWidthMax] = useState(getViewportTextWidthMax);
 
-  const [tabs, setTabs] = useState<MdFile[]>(
-    SAMPLE_FILES.map(normalizeTabContent),
-  );
-  const [activeId, setActiveId] = useState<string>(SAMPLE_FILES[0].id);
-  const tabsRef = useRef<MdFile[]>(SAMPLE_FILES.map(normalizeTabContent));
+  const [tabs, setTabs] = useState<MdFile[]>([]);
+  const [activeId, setActiveId] = useState<string>("");
+  const tabsRef = useRef<MdFile[]>([]);
+  const persistedSessionReadyRef = useRef(false);
+  const lastSavedSessionRef = useRef<string | null>(null);
+  /** État UI mémorisé par fichier (caret + scroll, par vue). Clé = path. */
+  const uiStateByPathRef = useRef<Map<string, PersistedUiState>>(new Map());
+  /** Historique des fichiers ouverts, plus récent en tête, max MAX_RECENT_PATHS. */
+  const [recentPaths, setRecentPaths] = useState<string[]>([]);
+  /** Vrai dès qu'on a déjà affiché l'onglet Bienvenue au moins une fois. */
+  const firstRunDoneRef = useRef(false);
   const [editMode, setEditMode] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("preview");
   const [exportOpen, setExportOpen] = useState(false);
@@ -282,9 +443,11 @@ function App() {
     new Map(),
   );
   const sourceRef = useRef<SourceViewHandle | null>(null);
+  const sourceScrollerRef = useRef<HTMLDivElement | null>(null);
 
   const active = tabs.find((t) => t.id === activeId) || tabs[0];
   const sourceVisible = !!active && editMode && viewMode === "source";
+  const sliderTextWidth = Math.min(tweaks.textWidth, textWidthMax);
 
   const sidePanelMode = sidePanel?.mode ?? null;
   // Map ligne → blockKey pour TOUTES les lignes de chaque bloc, pas seulement le début.
@@ -308,6 +471,252 @@ function App() {
     );
   }, []);
 
+  const toggleTaskAtLine = useCallback(
+    (tabId: string, lineIndex: number, checked: boolean) => {
+      setTabs((prev) =>
+        prev.map((tab) => {
+          if (tab.id !== tabId) return tab;
+          const lines = tab.content.split("\n");
+          const line = lines[lineIndex];
+          if (line == null) return tab;
+          const nextLine = line.replace(
+            /^([-*]\s+\[)([ xX])(\](?:\s+.*)?)$/,
+            `$1${checked ? "x" : " "}$3`,
+          );
+          if (nextLine === line) return tab;
+          lines[lineIndex] = nextLine;
+          const content = normalizeMarkdown(lines.join("\n"));
+          wysiwygHandles.current.get(tabId)?.refreshFromContent(content);
+          return { ...tab, content, dirty: true };
+        }),
+      );
+    },
+    [],
+  );
+
+  // Capture/restauration caret + scroll par fichier (clé = path).
+  // Seuls les onglets avec path sont persistés sur disque ; les autres sont
+  // mémorisés en RAM mais perdus au redémarrage (cohérent avec la décision
+  // de ne sauvegarder que les chemins).
+  const captureUiState = useCallback(
+    (tabId: string, mode: "source" | "preview") => {
+      const tab = tabsRef.current.find((t) => t.id === tabId);
+      if (!tab?.path) return;
+      const prev = uiStateByPathRef.current.get(tab.path) ?? {};
+      if (mode === "source") {
+        const caret = sourceRef.current?.getCaret() ?? null;
+        const scrollTop = sourceRef.current?.getScrollTop() ?? null;
+        if (caret == null && scrollTop == null) return;
+        uiStateByPathRef.current.set(tab.path, {
+          ...prev,
+          source: {
+            ...(caret ? { caret } : prev.source?.caret ? { caret: prev.source.caret } : {}),
+            ...(scrollTop != null
+              ? { scrollTop }
+              : prev.source?.scrollTop != null
+                ? { scrollTop: prev.source.scrollTop }
+                : {}),
+          },
+        });
+      } else {
+        const handle = wysiwygHandles.current.get(tabId);
+        const caret = handle?.getCaret() ?? null;
+        const scrollTop = readingPaneRef.current?.scrollTop ?? null;
+        if (caret == null && scrollTop == null) return;
+        uiStateByPathRef.current.set(tab.path, {
+          ...prev,
+          preview: {
+            ...(caret ? { caret } : prev.preview?.caret ? { caret: prev.preview.caret } : {}),
+            ...(scrollTop != null
+              ? { scrollTop }
+              : prev.preview?.scrollTop != null
+                ? { scrollTop: prev.preview.scrollTop }
+                : {}),
+          },
+        });
+      }
+      setUiStateTick((t) => t + 1);
+    },
+    [],
+  );
+
+  const restoreUiState = useCallback(
+    (tabId: string, mode: "source" | "preview", editing: boolean) => {
+      const tab = tabsRef.current.find((t) => t.id === tabId);
+      // Pas de path = onglet synthétique (welcome, "Nouveau"). Pas de
+      // restauration disque-persistée, mais le caret-au-début s'applique quand
+      // même si on entre en mode édition.
+      const ui = tab?.path
+        ? uiStateByPathRef.current.get(tab.path)
+        : undefined;
+      if (mode === "source") {
+        const src = ui?.source;
+        if (src?.caret) {
+          sourceRef.current?.setCaret(src.caret);
+        } else {
+          // Première visite de la vue source → caret au tout début, focus.
+          sourceRef.current?.setCaret({ line: 0, column: 0 });
+          sourceRef.current?.focus();
+        }
+        if (src?.scrollTop != null) {
+          sourceRef.current?.setScrollTop(src.scrollTop);
+        }
+      } else {
+        const pv = ui?.preview;
+        const handle = wysiwygHandles.current.get(tabId);
+        if (pv?.caret) {
+          handle?.setCaret(pv.caret);
+        } else if (editing && handle) {
+          // Première visite en édition WYSIWYG → caret au début, focus.
+          handle.setCaret({ offset: 0 });
+          handle.focus();
+        }
+        if (pv?.scrollTop != null && readingPaneRef.current) {
+          readingPaneRef.current.scrollTop = pv.scrollTop;
+        }
+      }
+    },
+    [],
+  );
+
+  // Vue actuellement active (utilisée pour savoir quoi capturer avant un switch).
+  const activeViewRef = useRef<"source" | "preview">("preview");
+  useEffect(() => {
+    activeViewRef.current = sourceVisible ? "source" : "preview";
+  }, [sourceVisible]);
+
+  // Avant fermeture : capture finale de la vue courante + écriture immédiate en
+  // localStorage (le debounce du Tauri store ne suffit pas si l'app est tuée).
+  useEffect(() => {
+    const flush = () => {
+      if (!activeId) return;
+      captureUiState(activeId, sourceVisible ? "source" : "preview");
+      const openPaths = tabsRef.current
+        .map((t) => t.path)
+        .filter((p): p is string => typeof p === "string");
+      const activeTab = tabsRef.current.find((t) => t.id === activeId);
+      const activePath = activeTab?.path ?? null;
+      const perFile: Record<string, PersistedUiState> = {};
+      for (const path of openPaths) {
+        const ui = uiStateByPathRef.current.get(path);
+        if (ui) perFile[path] = ui;
+      }
+      const session: PersistedSession = {
+        openPaths,
+        activePath,
+        perFile,
+        recentPaths,
+        firstRunDone: firstRunDoneRef.current,
+      };
+      try {
+        window.localStorage.setItem(
+          SESSION_STORAGE_KEY,
+          JSON.stringify(session),
+        );
+      } catch {
+        // localStorage plein : on tente quand même Tauri en synchrone.
+      }
+      void savePersistedSession(session);
+    };
+    window.addEventListener("beforeunload", flush);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("beforeunload", flush);
+      window.removeEventListener("pagehide", flush);
+    };
+  }, [activeId, sourceVisible, captureUiState, recentPaths]);
+
+  // Capture en continu (caret + scroll) pendant que l'utilisateur travaille.
+  // Cheap : on écrit dans la ref uniquement, sans re-render.
+  useEffect(() => {
+    if (!activeId) return;
+    const tab = tabsRef.current.find((t) => t.id === activeId);
+    if (!tab?.path) return;
+
+    const onSelection = () => {
+      if (sourceVisible) {
+        const caret = sourceRef.current?.getCaret();
+        if (caret) {
+          const prev = uiStateByPathRef.current.get(tab.path!) ?? {};
+          uiStateByPathRef.current.set(tab.path!, {
+            ...prev,
+            source: { ...prev.source, caret },
+          });
+        }
+      } else if (editMode) {
+        const caret = wysiwygHandles.current.get(activeId)?.getCaret();
+        if (caret) {
+          const prev = uiStateByPathRef.current.get(tab.path!) ?? {};
+          uiStateByPathRef.current.set(tab.path!, {
+            ...prev,
+            preview: { ...prev.preview, caret },
+          });
+        }
+      }
+    };
+    document.addEventListener("selectionchange", onSelection);
+    return () => document.removeEventListener("selectionchange", onSelection);
+  }, [activeId, sourceVisible, editMode]);
+
+  // Capture scroll preview (un seul scroller partagé entre tous les onglets WYSIWYG).
+  useEffect(() => {
+    const pane = readingPaneRef.current;
+    if (!pane) return;
+    const onScroll = () => {
+      if (!activeId) return;
+      const tab = tabsRef.current.find((t) => t.id === activeId);
+      if (!tab?.path) return;
+      const prev = uiStateByPathRef.current.get(tab.path) ?? {};
+      uiStateByPathRef.current.set(tab.path, {
+        ...prev,
+        preview: { ...prev.preview, scrollTop: pane.scrollTop },
+      });
+    };
+    pane.addEventListener("scroll", onScroll, { passive: true });
+    return () => pane.removeEventListener("scroll", onScroll);
+  }, [activeId, sourceVisible]);
+
+  // Capture scroll source (le scroller est le wrapper monté seulement en mode source).
+  useEffect(() => {
+    if (!sourceVisible) return;
+    const pane = sourceScrollerRef.current;
+    if (!pane) return;
+    const onScroll = () => {
+      if (!activeId) return;
+      const tab = tabsRef.current.find((t) => t.id === activeId);
+      if (!tab?.path) return;
+      const prev = uiStateByPathRef.current.get(tab.path) ?? {};
+      uiStateByPathRef.current.set(tab.path, {
+        ...prev,
+        source: { ...prev.source, scrollTop: pane.scrollTop },
+      });
+    };
+    pane.addEventListener("scroll", onScroll, { passive: true });
+    return () => pane.removeEventListener("scroll", onScroll);
+  }, [activeId, sourceVisible]);
+
+  // Restauration caret + scroll après chaque changement d'onglet / vue.
+  // Double rAF : le premier laisse React commit le DOM, le second laisse le
+  // navigateur appliquer le layout (notamment pour passer display:none → block
+  // sur les WysiwygEditor non actifs et pour le remount du SourceView).
+  useEffect(() => {
+    if (!activeId) return;
+    let raf2 = 0;
+    const raf = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        restoreUiState(
+          activeId,
+          sourceVisible ? "source" : "preview",
+          editMode,
+        );
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf);
+      cancelAnimationFrame(raf2);
+    };
+  }, [activeId, sourceVisible, editMode, restoreUiState]);
+
   const handleAction = useCallback(
     (action: ToolbarAction) => {
       if (sourceVisible) {
@@ -323,6 +732,8 @@ function App() {
   const switchViewMode = useCallback(
     (newMode: ViewMode) => {
       if (newMode === viewMode) return;
+      // Snapshot caret + scroll de la vue qui se ferme.
+      captureUiState(activeId, viewMode === "source" ? "source" : "preview");
       if (viewMode === "preview" && newMode === "source") {
         const md = wysiwygHandles.current.get(activeId)?.getMarkdown();
         if (md != null) {
@@ -344,10 +755,12 @@ function App() {
       }
       setViewMode(newMode);
     },
-    [viewMode, activeId],
+    [viewMode, activeId, captureUiState],
   );
 
   const toggleEditMode = useCallback(() => {
+    // Snapshot caret + scroll de la vue qui se ferme avant de basculer.
+    captureUiState(activeId, sourceVisible ? "source" : "preview");
     if (editMode) {
       // Quitter l'édition : flush le contenu vers l'état (pour que ReadPreview soit à jour).
       if (sourceVisible) {
@@ -379,11 +792,13 @@ function App() {
     setSidePanel(null);
     setHighlightedBlock(null);
     setEditMode((v) => !v);
-  }, [editMode, sourceVisible, activeId]);
+  }, [editMode, sourceVisible, activeId, captureUiState]);
 
   const switchTab = useCallback(
     (newId: string) => {
       if (newId === activeId) return;
+      // Snapshot caret + scroll de l'onglet sortant pour la vue courante.
+      captureUiState(activeId, sourceVisible ? "source" : "preview");
       // Si on est en source view, on flushe avant changement d'onglet (source view
       // n'est mountée que pour l'onglet actif et va être démontée).
       if (sourceVisible) {
@@ -398,12 +813,78 @@ function App() {
       }
       setActiveId(newId);
     },
-    [sourceVisible, activeId],
+    [sourceVisible, activeId, captureUiState],
   );
 
   useEffect(() => {
-    window.localStorage.setItem(TWEAKS_STORAGE_KEY, JSON.stringify(tweaks));
+    let cancelled = false;
+
+    loadPersistedTweaks()
+      .then((saved) => {
+        if (!cancelled && saved) setTweaks(saved);
+      })
+      .finally(() => {
+        if (!cancelled) persistedTweaksReadyRef.current = true;
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const serialized = JSON.stringify(tweaks);
+    window.localStorage.setItem(TWEAKS_STORAGE_KEY, serialized);
+
+    if (!persistedTweaksReadyRef.current) return;
+    if (lastSavedTweaksRef.current === serialized) return;
+
+    lastSavedTweaksRef.current = serialized;
+    void savePersistedTweaks(tweaks);
   }, [tweaks]);
+
+  // Sauvegarde session (chemins ouverts + état UI) avec debounce.
+  // L'état UI vit dans uiStateByPathRef ; on tague ses mises à jour via uiStateTick.
+  const [uiStateTick, setUiStateTick] = useState(0);
+  useEffect(() => {
+    if (!persistedSessionReadyRef.current) return;
+
+    const openPaths = tabs
+      .map((t) => t.path)
+      .filter((p): p is string => typeof p === "string");
+    const activeTab = tabs.find((t) => t.id === activeId);
+    const activePath = activeTab?.path ?? null;
+
+    // Élaguer perFile aux chemins encore présents.
+    const perFile: Record<string, PersistedUiState> = {};
+    for (const path of openPaths) {
+      const ui = uiStateByPathRef.current.get(path);
+      if (ui) perFile[path] = ui;
+    }
+
+    const session: PersistedSession = {
+      openPaths,
+      activePath,
+      perFile,
+      recentPaths,
+      firstRunDone: firstRunDoneRef.current,
+    };
+    const serialized = JSON.stringify(session);
+    if (lastSavedSessionRef.current === serialized) return;
+    lastSavedSessionRef.current = serialized;
+
+    window.localStorage.setItem(SESSION_STORAGE_KEY, serialized);
+    const timer = setTimeout(() => {
+      void savePersistedSession(session);
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [tabs, activeId, uiStateTick, recentPaths]);
+
+  useEffect(() => {
+    const onResize = () => setTextWidthMax(getViewportTextWidthMax());
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   useEffect(() => {
     const onWheel = (e: WheelEvent) => {
@@ -451,22 +932,44 @@ function App() {
     setActiveId(id);
   }, []);
 
-  const addOrFocusTab = useCallback((f: OpenedFile) => {
-    const existing = tabsRef.current.find((t) => t.path === f.path);
-    if (existing) {
-      setActiveId(existing.id);
-      return;
-    }
-
-    const id = `file-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const nextTabs = [
-      ...tabsRef.current,
-      { id, name: f.name, content: normalizeMarkdown(f.content), path: f.path },
-    ];
-    tabsRef.current = nextTabs;
-    setTabs(nextTabs);
-    setActiveId(id);
+  /** Préfixe `path` dans l'historique récent, dédup, clamp à MAX_RECENT_PATHS. */
+  const bumpRecent = useCallback((path: string) => {
+    setRecentPaths((prev) => {
+      const next = [path, ...prev.filter((p) => p !== path)];
+      return next.slice(0, MAX_RECENT_PATHS);
+    });
   }, []);
+
+  /** Retire un chemin des récents (fichier introuvable). */
+  const dropRecent = useCallback((path: string) => {
+    setRecentPaths((prev) => prev.filter((p) => p !== path));
+  }, []);
+
+  const addOrFocusTab = useCallback(
+    (f: OpenedFile) => {
+      bumpRecent(f.path);
+      const existing = tabsRef.current.find((t) => t.path === f.path);
+      if (existing) {
+        setActiveId(existing.id);
+        return;
+      }
+
+      const id = `file-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const nextTabs = [
+        ...tabsRef.current,
+        {
+          id,
+          name: f.name,
+          content: normalizeMarkdown(f.content),
+          path: f.path,
+        },
+      ];
+      tabsRef.current = nextTabs;
+      setTabs(nextTabs);
+      setActiveId(id);
+    },
+    [bumpRecent],
+  );
 
   const handleOpen = useCallback(async () => {
     try {
@@ -478,19 +981,112 @@ function App() {
     }
   }, [addOrFocusTab]);
 
+  const handleOpenRecent = useCallback(
+    async (path: string) => {
+      try {
+        const content = await invoke<string>("read_text_file", { path });
+        const name = path.split(/[/\\]/).pop() || "document.md";
+        addOrFocusTab({ path, name, content });
+      } catch (err) {
+        console.error("Ouverture du fichier récent échouée:", err);
+        dropRecent(path);
+      }
+    },
+    [addOrFocusTab, dropRecent],
+  );
+
   useEffect(() => {
     const unlisten = listen<OpenedFile>("open-file", (event) => {
       addOrFocusTab(event.payload);
     });
-
-    emit("frontend-ready").catch((err) =>
-      console.error("Signal frontend-ready échoué:", err),
-    );
-
     return () => {
       unlisten.then((fn) => fn());
     };
   }, [addOrFocusTab]);
+
+  // Boot : restaurer la session (onglets + état UI) puis signaler le frontend prêt.
+  // L'ordre est critique : tabsRef.current doit refléter les onglets restaurés
+  // avant que les events "open-file" déclenchés par argv ne soient traités, sinon
+  // un doublon serait créé pour un fichier déjà restauré depuis la session.
+  useEffect(() => {
+    let cancelled = false;
+
+    const restore = async () => {
+      const localSession = loadSession();
+      let session: PersistedSession = localSession;
+
+      // Backup Tauri store : utilisé si localStorage est totalement vierge
+      // (cas d'un wipe de WebView storage / install fraîche en dev).
+      const localEmpty =
+        !session.openPaths.length &&
+        !session.recentPaths.length &&
+        !session.firstRunDone;
+      if (localEmpty) {
+        const remote = await loadPersistedSession();
+        if (remote) session = remote;
+      }
+
+      const restored: MdFile[] = [];
+      for (const path of session.openPaths) {
+        try {
+          const content = await invoke<string>("read_text_file", { path });
+          if (cancelled) return;
+          const id = `file-${Date.now()}-${restored.length}-${Math.random().toString(36).slice(2)}`;
+          const name =
+            path.split(/[/\\]/).pop() || "document.md";
+          restored.push({
+            id,
+            name,
+            content: normalizeMarkdown(content),
+            path,
+          });
+        } catch {
+          // Fichier introuvable / inaccessible — on l'ignore silencieusement.
+        }
+      }
+      if (cancelled) return;
+
+      uiStateByPathRef.current = new Map(Object.entries(session.perFile));
+      setRecentPaths(session.recentPaths);
+      firstRunDoneRef.current = session.firstRunDone;
+
+      // Premier lancement : aucun onglet précédent et la doc n'a jamais été
+      // affichée → on injecte l'onglet "Bienvenue.md" comme document non
+      // sauvegardé (pas de path, donc jamais persisté dans openPaths).
+      if (!session.firstRunDone && restored.length === 0) {
+        restored.push({
+          id: WELCOME_TAB_ID,
+          name: "Bienvenue.md",
+          content: normalizeMarkdown(WELCOME_MD),
+        });
+        firstRunDoneRef.current = true;
+      }
+
+      tabsRef.current = restored;
+      setTabs(restored);
+
+      if (restored.length) {
+        const activeTab = session.activePath
+          ? restored.find((t) => t.path === session.activePath)
+          : null;
+        setActiveId((activeTab ?? restored[0]).id);
+      }
+
+      persistedSessionReadyRef.current = true;
+      // On invalide explicitement lastSavedSessionRef pour que l'effet de
+      // sauvegarde voit firstRunDone à jour et persiste la nouvelle valeur.
+      lastSavedSessionRef.current = null;
+
+      emit("frontend-ready").catch((err) =>
+        console.error("Signal frontend-ready échoué:", err),
+      );
+    };
+
+    void restore();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleSaveAs = useCallback(async () => {
     const md = getActiveMarkdown();
@@ -816,7 +1412,7 @@ function App() {
     const next = tabs.filter((t) => t.id !== id);
     wysiwygHandles.current.delete(id);
     setTabs(next);
-    if (activeId === id && next.length) setActiveId(next[0].id);
+    if (activeId === id) setActiveId(next.length ? next[0].id : "");
   };
 
   const onExport = (kind: ExportKind) => {
@@ -864,7 +1460,7 @@ function App() {
       data-palette={tweaks.palette}
       data-font={tweaks.font}
       data-density={tweaks.density}
-      style={{ "--reading-width": `${tweaks.textWidth}%` } as CSSProperties}
+      style={{ "--reading-width": `${tweaks.textWidth}px` } as CSSProperties}
     >
       {/* Top bar unifié : menu Fichier + onglets + actions + contrôles fenêtre */}
       <div className="topbar" data-tauri-drag-region>
@@ -876,6 +1472,8 @@ function App() {
           onSave={handleSave}
           onSaveAs={handleSaveAs}
           onExportPdf={() => onExport("pdf")}
+          recents={recentPaths}
+          onOpenRecent={handleOpenRecent}
         />
         <div className="topbar-sep" data-tauri-drag-region />
         <div
@@ -994,24 +1592,52 @@ function App() {
         )}
 
         {!active ? (
-          <div className="welcome" style={{ flex: 1 }}>
-            <h1>Aucun document ouvert</h1>
-            <p>Glissez un fichier .md ici, ou créez-en un nouveau.</p>
-            <div className="kbds">
-              <span className="kbd">⌘N</span>
-              <span
-                style={{
-                  alignSelf: "center",
-                  color: "var(--muted)",
-                  fontSize: 11,
-                }}
-              >
-                nouveau
-              </span>
+          <div className="welcome-empty" style={{ flex: 1 }}>
+            <div className="welcome-empty-inner">
+              {recentPaths.length > 0 ? (
+                <div className="welcome-recents">
+                  <h1>Fichiers récents</h1>
+                  <ul className="welcome-recents-list">
+                    {recentPaths.map((path) => (
+                      <li key={path}>
+                        <button
+                          className="welcome-recents-item"
+                          title={path}
+                          onClick={() => handleOpenRecent(path)}
+                        >
+                          <span className="welcome-recents-name">
+                            {basename(path)}
+                          </span>
+                          <span className="welcome-recents-path">{path}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <div className="welcome-doc reading">
+                  {renderMarkdown(normalizeMarkdown(WELCOME_MD))}
+                </div>
+              )}
+              <div className="welcome-actions">
+                <button className="welcome-btn" onClick={handleNew}>
+                  <Icon.Plus />
+                  <span>Nouveau document</span>
+                  <span className="kbd">⌘N</span>
+                </button>
+                <button className="welcome-btn" onClick={handleOpen}>
+                  <Icon.FileText />
+                  <span>Ouvrir un fichier…</span>
+                  <span className="kbd">⌘O</span>
+                </button>
+              </div>
             </div>
           </div>
         ) : sourceVisible ? (
-          <div style={{ flex: 1, overflow: "auto" }}>
+          <div
+            ref={sourceScrollerRef}
+            style={{ flex: 1, overflow: "auto" }}
+          >
             <SourceView
               ref={sourceRef}
               content={active.content}
@@ -1093,6 +1719,8 @@ function App() {
                       sidePanel?.mode === "block" ? sidePanel.block.key : null,
                     inspectMode: sidePanel?.mode ?? null,
                     highlightedBlockKey: highlightedBlock,
+                    onTaskToggle: (lineIndex, checked) =>
+                      toggleTaskAtLine(active.id, lineIndex, checked),
                     blockEls,
                   })}
                 </div>
@@ -1263,11 +1891,11 @@ function App() {
         <TweakSection label="Mise en page" />
         <TweakSlider
           label="Largeur du texte"
-          value={tweaks.textWidth}
+          value={sliderTextWidth}
           min={TEXT_WIDTH_MIN}
-          max={TEXT_WIDTH_MAX}
-          step={1}
-          unit="%"
+          max={textWidthMax}
+          step={10}
+          unit="px"
           onChange={(v) => setTweak("textWidth", v)}
         />
 
