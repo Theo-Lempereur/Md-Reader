@@ -1,6 +1,7 @@
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, MouseEvent, ReactNode } from "react";
 import katex from "katex";
 import { Icon } from "../components/Icons";
+import { slugify } from "../slash/runners";
 
 export type BlockInfo = {
   key: number;
@@ -129,6 +130,37 @@ function findClosing(
   return -1;
 }
 
+function handleLinkClick(
+  e: MouseEvent<HTMLAnchorElement>,
+  url: string,
+): void {
+  e.preventDefault();
+  if (!(e.ctrlKey || e.metaKey)) return;
+  if (!url) return;
+  if (url.startsWith("#")) {
+    const target = document.getElementById(url.slice(1));
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+  import("@tauri-apps/plugin-opener")
+    .then(({ openUrl }) => openUrl(url))
+    .catch((err) => console.error("Open URL failed:", err));
+}
+
+/** Renvoie le texte brut d'un fragment markdown inline, en retirant les
+ * marqueurs `**`, `*`, `~~`, `` ` ``, `[...]`, etc., pour calculer un slug. */
+function plainTextFromInline(text: string): string {
+  return text
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/~~([^~]+)~~/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/\$[^$]*\$/g, "")
+    .replace(/\\([\\`*_{}\[\]()#+\-.!|~<>])/g, "$1")
+    .trim();
+}
+
 export function inlineRender(text: string): ReactNode[] {
   const out: ReactNode[] = [];
   let key = 0;
@@ -217,7 +249,8 @@ export function inlineRender(text: string): ReactNode[] {
               <a
                 key={key++}
                 href={url}
-                onClick={(e) => e.preventDefault()}
+                title={url}
+                onClick={(e) => handleLinkClick(e, url)}
               >
                 {inlineRender(linkText)}
               </a>,
@@ -350,6 +383,15 @@ export function renderMarkdown(
   const blocks: ReactNode[] = [];
   let i = 0;
   let key = 0;
+  const headingSlugCounts = new Map<string, number>();
+
+  const computeHeadingId = (raw: string): string | undefined => {
+    const base = slugify(plainTextFromInline(raw));
+    if (!base) return undefined;
+    const count = headingSlugCounts.get(base) ?? 0;
+    headingSlugCounts.set(base, count + 1);
+    return count === 0 ? base : `${base}-${count}`;
+  };
 
   while (i < lines.length) {
     const line = lines[i];
@@ -358,24 +400,25 @@ export function renderMarkdown(
     if (m) {
       const lvl = m[1].length;
       const content = inlineRender(m[2]);
+      const id = computeHeadingId(m[2]);
       switch (lvl) {
         case 1:
-          blocks.push(<h1 key={key++}>{content}</h1>);
+          blocks.push(<h1 key={key++} id={id}>{content}</h1>);
           break;
         case 2:
-          blocks.push(<h2 key={key++}>{content}</h2>);
+          blocks.push(<h2 key={key++} id={id}>{content}</h2>);
           break;
         case 3:
-          blocks.push(<h3 key={key++}>{content}</h3>);
+          blocks.push(<h3 key={key++} id={id}>{content}</h3>);
           break;
         case 4:
-          blocks.push(<h4 key={key++}>{content}</h4>);
+          blocks.push(<h4 key={key++} id={id}>{content}</h4>);
           break;
         case 5:
-          blocks.push(<h5 key={key++}>{content}</h5>);
+          blocks.push(<h5 key={key++} id={id}>{content}</h5>);
           break;
         default:
-          blocks.push(<h6 key={key++}>{content}</h6>);
+          blocks.push(<h6 key={key++} id={id}>{content}</h6>);
       }
       i++;
       continue;

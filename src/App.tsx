@@ -26,7 +26,6 @@ import { Icon } from "./components/Icons";
 import { SourceView, type SourceViewHandle } from "./components/SourceView";
 import {
   Toolbar,
-  type ExportKind,
   type ToolbarAction,
 } from "./components/Toolbar";
 import { FloatingToolbar } from "./components/FloatingToolbar";
@@ -416,7 +415,6 @@ function App() {
   const firstRunDoneRef = useRef(false);
   const [editMode, setEditMode] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("preview");
-  const [exportOpen, setExportOpen] = useState(false);
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const [pdfModalOpen, setPdfModalOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -1190,7 +1188,6 @@ function App() {
         setSearchOpen(true);
       } else if (e.key === "Escape") {
         setSearchOpen(false);
-        setExportOpen(false);
         setFileMenuOpen(false);
       } else if (mod && key === "m") {
         e.preventDefault();
@@ -1224,6 +1221,29 @@ function App() {
     viewMode,
     switchViewMode,
   ]);
+
+  // Curseur main sur les liens : actif seulement quand Ctrl/Cmd est enfoncé.
+  useEffect(() => {
+    const update = (held: boolean) => {
+      document.body.classList.toggle("ctrl-held", held);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey) update(true);
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (!e.ctrlKey && !e.metaKey) update(false);
+    };
+    const reset = () => update(false);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", reset);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", reset);
+      document.body.classList.remove("ctrl-held");
+    };
+  }, []);
 
   // Selection toolbar (WYSIWYG preview + edit mode)
   useEffect(() => {
@@ -1417,18 +1437,6 @@ function App() {
     if (activeId === id) setActiveId(next.length ? next[0].id : "");
   };
 
-  const onExport = (kind: ExportKind) => {
-    setExportOpen(false);
-    if (kind === "pdf") {
-      setPdfModalOpen(true);
-      return;
-    }
-    if (kind === "print") {
-      setEditMode(false);
-      setTimeout(() => window.print(), 80);
-    }
-  };
-
   const handlePdfExport = async (opts: {
     format: Tweaks["pdfPageFormat"];
     colorMode: Tweaks["pdfColorMode"];
@@ -1473,7 +1481,7 @@ function App() {
           onOpen={handleOpen}
           onSave={handleSave}
           onSaveAs={handleSaveAs}
-          onExportPdf={() => onExport("pdf")}
+          onExportPdf={() => setPdfModalOpen(true)}
           recents={recentPaths}
           onOpenRecent={handleOpenRecent}
         />
@@ -1567,10 +1575,7 @@ function App() {
         <Toolbar
           viewMode={viewMode}
           onViewMode={switchViewMode}
-          onExport={onExport}
           onAction={handleAction}
-          exportOpen={exportOpen}
-          setExportOpen={setExportOpen}
           pos={tweaks.toolbarPos}
         />
       )}

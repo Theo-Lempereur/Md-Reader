@@ -21,8 +21,11 @@ import {
 import {
   addTableRow,
   clearTriggerText,
+  collectHeadings,
   getCurrentTableCell,
+  insertLink,
   insertTable,
+  updateLink,
   type SlashCtx,
 } from "./runners";
 
@@ -49,7 +52,25 @@ type FormMode = {
   triggerOffset: number;
 };
 
-export type SlashState = Inactive | ListMode | FormMode;
+export type LinkFormPayload = {
+  url: string;
+  label: string;
+};
+
+export type LinkFormMode = {
+  active: true;
+  mode: "link-form";
+  anchor: Anchor;
+  /** Plage où insérer le lien (sélection capturée au moment d'ouvrir). */
+  insertionRange: Range | null;
+  /** Si édition d'un lien existant. */
+  editingAnchor: HTMLAnchorElement | null;
+  initialUrl: string;
+  initialLabel: string;
+  headings: { label: string; slug: string }[];
+};
+
+export type SlashState = Inactive | ListMode | FormMode | LinkFormMode;
 
 type Opts = {
   editorRef: RefObject<HTMLDivElement | null>;
@@ -69,8 +90,12 @@ export type SlashApi = {
   pickIndex: (index: number) => void;
   /** Validation du sous-formulaire tableau. */
   submitTableForm: (rows: number, cols: number) => void;
-  /** Annulation du sous-formulaire tableau. */
+  /** Validation du sous-formulaire lien. */
+  submitLinkForm: (payload: LinkFormPayload) => void;
+  /** Annulation du sous-formulaire (tableau ou lien). */
   cancelForm: () => void;
+  /** Ouvre le formulaire de lien depuis l'extérieur (bouton toolbar, popover). */
+  openLinkForm: (opts?: { editing?: HTMLAnchorElement }) => void;
 };
 
 /** Le `/` est-il en position de déclenchement ? Vrai si le caret est précédé
@@ -381,6 +406,28 @@ export function useSlashCommand({
         return;
       }
 
+      if (cmd.needsForm === "link") {
+        // Nettoie `/lien…` ; le caret se replace au triggerOffset, qui sert
+        // de point d'insertion pour le futur <a>.
+        clearTriggerText(editor, s.triggerNode, s.triggerOffset);
+        const sel = window.getSelection();
+        let insertionRange: Range | null = null;
+        if (sel && sel.rangeCount > 0) {
+          insertionRange = sel.getRangeAt(0).cloneRange();
+        }
+        setState({
+          active: true,
+          mode: "link-form",
+          anchor: s.anchor,
+          insertionRange,
+          editingAnchor: null,
+          initialUrl: "",
+          initialLabel: "",
+          headings: collectHeadings(editor),
+        });
+        return;
+      }
+
       // Désactive le state d'abord pour éviter les re-rendus parasites
       setState({ active: false });
       cmd.run?.(ctx);
@@ -431,6 +478,80 @@ export function useSlashCommand({
       onInput?.();
     },
     [editorRef, onInput],
+  );
+
+  const submitLinkForm = useCallback(
+    (payload: LinkFormPayload) => {
+      const s = stateRef.current;
+      if (!s.active || s.mode !== "link-form") return;
+      const editor = editorRef.current;
+      if (!editor) return;
+      setState({ active: false });
+      editor.focus();
+
+      if (s.editingAnchor) {
+        updateLink(editor, s.editingAnchor, payload);
+      } else {
+        insertLink(
+          { editor, triggerNode: editor, triggerOffset: 0, onInput },
+          {
+            url: payload.url,
+            label: payload.label,
+            range: s.insertionRange ?? undefined,
+          },
+        );
+      }
+      onInput?.();
+    },
+    [editorRef, onInput],
+  );
+
+  const openLinkForm = useCallback(
+    (opts?: { editing?: HTMLAnchorElement }) => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      editor.focus();
+      const editingAnchor = opts?.editing ?? null;
+
+      let anchor: Anchor;
+      let insertionRange: Range | null = null;
+      let initialUrl = "";
+      let initialLabel = "";
+
+      if (editingAnchor) {
+        const rect = editingAnchor.getBoundingClientRect();
+        anchor = { x: rect.left, y: rect.bottom };
+        initialUrl = editingAnchor.getAttribute("href") ?? "";
+        initialLabel = editingAnchor.textContent ?? "";
+      } else {
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount > 0) {
+          const range = sel.getRangeAt(0);
+          if (editor.contains(range.startContainer)) {
+            insertionRange = range.cloneRange();
+            initialLabel = range.toString();
+          }
+        }
+        const a = computeAnchor();
+        if (a) anchor = a;
+        else {
+          const r = editor.getBoundingClientRect();
+          anchor = { x: r.left + 20, y: r.top + 20 };
+        }
+      }
+
+      setState({
+        active: true,
+        mode: "link-form",
+        anchor,
+        insertionRange,
+        editingAnchor,
+        initialUrl,
+        initialLabel,
+        headings: collectHeadings(editor),
+      });
+    },
+    [editorRef],
   );
 
   const cancelForm = useCallback(() => {
@@ -596,7 +717,7 @@ export function useSlashCommand({
         return;
       }
 
-      if (s.mode === "table-form") {
+      if (s.mode === "table-form" || s.mode === "link-form") {
         // Les touches sont gérées dans le formulaire lui-même ; on ignore ici.
         return;
       }
@@ -671,7 +792,9 @@ export function useSlashCommand({
     close,
     pickIndex,
     submitTableForm,
+    submitLinkForm,
     cancelForm,
+    openLinkForm,
   };
 }
 

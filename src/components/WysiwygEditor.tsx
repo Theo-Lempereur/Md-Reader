@@ -3,15 +3,21 @@ import {
   useEffect,
   useImperativeHandle,
   useRef,
+  useState,
 } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { normalizeMarkdown } from "../markdown/normalize";
 import { renderMarkdown } from "../markdown/render";
 import { htmlToMarkdown } from "../lib/htmlToMarkdown";
 import { attachMathDoubleClick } from "../slash/math";
-import { runWysiwygCommand } from "../slash/runners";
+import {
+  runWysiwygCommand,
+  syncHeadingIds,
+  unlinkAnchor,
+} from "../slash/runners";
 import { useSlashCommand } from "../slash/useSlashCommand";
 import { SlashMenu } from "./SlashMenu";
+import { LinkPopover } from "./LinkPopover";
 import type { ToolbarAction } from "./Toolbar";
 import type { PreviewCaret } from "../types";
 
@@ -36,6 +42,9 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
   function WysiwygEditor({ initialContent, enabled, onInput }, ref) {
     const divRef = useRef<HTMLDivElement | null>(null);
     const mountedRef = useRef(false);
+    const [activeLink, setActiveLink] = useState<HTMLAnchorElement | null>(
+      null,
+    );
 
     const slash = useSlashCommand({
       editorRef: divRef,
@@ -52,8 +61,87 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
       divRef.current.innerHTML = renderToStaticMarkup(
         <>{renderMarkdown(content)}</>,
       );
+      syncHeadingIds(divRef.current);
       mountedRef.current = true;
     }, [initialContent]);
+
+    // Resynchronise les `id` des headings à chaque édition (debounce léger).
+    useEffect(() => {
+      const el = divRef.current;
+      if (!el || !enabled) return;
+      let timer: number | null = null;
+      const handler = () => {
+        if (timer !== null) window.clearTimeout(timer);
+        timer = window.setTimeout(() => {
+          if (divRef.current) syncHeadingIds(divRef.current);
+        }, 200);
+      };
+      el.addEventListener("input", handler);
+      return () => {
+        el.removeEventListener("input", handler);
+        if (timer !== null) window.clearTimeout(timer);
+      };
+    }, [enabled]);
+
+    // Détecte si le caret est dans un <a>, pour afficher le popover.
+    useEffect(() => {
+      if (!enabled) {
+        setActiveLink(null);
+        return;
+      }
+      const el = divRef.current;
+      if (!el) return;
+      const onSelectionChange = () => {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) {
+          setActiveLink(null);
+          return;
+        }
+        const node = sel.getRangeAt(0).startContainer;
+        if (!el.contains(node)) {
+          setActiveLink(null);
+          return;
+        }
+        const start =
+          node.nodeType === 1 ? (node as Element) : node.parentElement;
+        const a = start?.closest("a");
+        setActiveLink(a instanceof HTMLAnchorElement ? a : null);
+      };
+      document.addEventListener("selectionchange", onSelectionChange);
+      return () =>
+        document.removeEventListener("selectionchange", onSelectionChange);
+    }, [enabled]);
+
+    // Ctrl+clic sur un lien : ouvre l'URL (externe via Tauri) ou scroll (#ancre).
+    useEffect(() => {
+      const el = divRef.current;
+      if (!el) return;
+      const onClick = (e: MouseEvent) => {
+        const target = e.target;
+        if (!(target instanceof Element)) return;
+        const a = target.closest("a");
+        if (!a || !el.contains(a)) return;
+        const url = a.getAttribute("href");
+        if (!url) return;
+        if (!(e.ctrlKey || e.metaKey)) {
+          // En mode édition, on bloque la navigation native ; sans Ctrl le
+          // clic place simplement le caret comme du texte normal.
+          if (enabled) e.preventDefault();
+          return;
+        }
+        e.preventDefault();
+        if (url.startsWith("#")) {
+          const targetEl = document.getElementById(url.slice(1));
+          targetEl?.scrollIntoView({ behavior: "smooth", block: "start" });
+          return;
+        }
+        import("@tauri-apps/plugin-opener")
+          .then(({ openUrl }) => openUrl(url))
+          .catch((err) => console.error("Open URL failed:", err));
+      };
+      el.addEventListener("click", onClick);
+      return () => el.removeEventListener("click", onClick);
+    }, [enabled]);
 
     useEffect(() => {
       const el = divRef.current;
@@ -97,6 +185,24 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
           const el = divRef.current;
           if (!el) return;
           el.focus();
+          if (action === "link") {
+            const sel = window.getSelection();
+            const insideLink =
+              sel && sel.rangeCount > 0
+                ? (() => {
+                    const node = sel.getRangeAt(0).startContainer;
+                    if (!el.contains(node)) return null;
+                    const start =
+                      node.nodeType === 1
+                        ? (node as Element)
+                        : node.parentElement;
+                    const a = start?.closest("a");
+                    return a instanceof HTMLAnchorElement ? a : null;
+                  })()
+                : null;
+            slash.openLinkForm(insideLink ? { editing: insideLink } : undefined);
+            return;
+          }
           runWysiwygCommand(el, action);
           onInput?.();
         },
@@ -110,12 +216,16 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
           divRef.current.innerHTML = renderToStaticMarkup(
             <>{renderMarkdown(normalizedContent)}</>,
           );
+          syncHeadingIds(divRef.current);
         },
         getCaret: () => readPreviewCaret(divRef.current),
         setCaret: (c) => writePreviewCaret(divRef.current, c),
       }),
-      [onInput],
+      [onInput, slash],
     );
+
+    const isFormOpen =
+      slash.state.active && slash.state.mode === "link-form";
 
     return (
       <>
@@ -133,8 +243,25 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
           matches={slash.matches}
           onPick={slash.pickIndex}
           onSubmitTable={slash.submitTableForm}
+          onSubmitLink={slash.submitLinkForm}
           onCancelForm={slash.cancelForm}
         />
+        {enabled && !isFormOpen && (
+          <LinkPopover
+            anchor={activeLink}
+            onEdit={() => {
+              if (activeLink) slash.openLinkForm({ editing: activeLink });
+            }}
+            onRemove={() => {
+              const el = divRef.current;
+              if (el && activeLink) {
+                unlinkAnchor(el, activeLink);
+                setActiveLink(null);
+                onInput?.();
+              }
+            }}
+          />
+        )}
       </>
     );
   },

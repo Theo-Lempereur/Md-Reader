@@ -24,7 +24,7 @@ export type SlashCommand = {
   run?: (ctx: SlashCtx) => void;
   /** Si défini, la validation déclenche un sous-mode dans le popup au lieu
    * d'exécuter immédiatement. Le composant SlashMenu gère ces modes. */
-  needsForm?: "table";
+  needsForm?: "table" | "link";
   /** Activable seulement dans certains contextes (vérifié par `isEnabled`). */
   isEnabled?: (editor: HTMLElement) => boolean;
 };
@@ -97,9 +97,9 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     id: "link",
     names: ["lien", "link", "url"],
     label: "Lien",
-    hint: "[…](url)",
+    hint: "URL + libellé",
     group: "format",
-    run: mapped("link"),
+    needsForm: "link",
   },
 
   // ---------------- Blocs ----------------

@@ -1234,9 +1234,117 @@ button {
   text-decoration: underline;
   text-decoration-color: var(--accent-soft);
   text-underline-offset: 3px;
+  cursor: text;
 }
 .reading a:hover {
   text-decoration-color: var(--accent);
+}
+body.ctrl-held .reading a {
+  cursor: pointer;
+}
+body.ctrl-held .reading a:hover {
+  text-decoration-color: var(--accent);
+}
+
+/* Popover d'édition de lien (au-dessus du <a> sélectionné) */
+.link-popover {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
+  background: var(--panel, #2a2a2a);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 6px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+  max-width: 360px;
+  color: var(--text, #ddd);
+}
+.link-popover-url {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: var(--accent-soft);
+}
+.link-popover-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+}
+.link-popover-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.link-popover-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Variantes pour le formulaire de lien dans le SlashMenu */
+.slash-menu-form-link {
+  min-width: 280px;
+}
+.slash-menu-form-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.slash-menu-form-tabs button {
+  flex: 1;
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+}
+.slash-menu-form-tabs button.active {
+  background: var(--accent-soft, rgba(120, 170, 255, 0.18));
+  border-color: var(--accent, #79a8ff);
+  color: var(--accent, #79a8ff);
+}
+.slash-menu-form-tabs button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.slash-menu-form-tabs-sub button {
+  font-size: 11px;
+  padding: 3px 6px;
+}
+.slash-menu-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: var(--muted, #aaa);
+}
+.slash-menu-form-field input,
+.slash-menu-form-field select {
+  padding: 5px 7px;
+  font-size: 13px;
+  background: var(--bg, #1e1e1e);
+  color: var(--text, #ddd);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  border-radius: 4px;
+}
+.slash-menu-form-field input:focus,
+.slash-menu-form-field select:focus {
+  outline: none;
+  border-color: var(--accent, #79a8ff);
 }
 .reading strong {
   font-weight: 700;

@@ -152,11 +152,9 @@ export function runWysiwygCommand(editor: HTMLElement, action: ToolbarAction) {
     case "ol":
       document.execCommand("insertOrderedList");
       return;
-    case "link": {
-      const url = window.prompt("URL ?");
-      if (url) document.execCommand("createLink", false, url);
+    case "link":
+      // Cas géré au niveau supérieur (ouvre le formulaire de lien).
       return;
-    }
     case "undo":
       document.execCommand("undo");
       return;
@@ -258,6 +256,138 @@ export function insertTaskCheckbox(ctx: SlashCtx, checked: boolean) {
     sel.addRange(r);
   }
   dispatchInput(ctx.editor);
+}
+
+/* ------------------------------------------------------------------ */
+/* Liens                                                               */
+/* ------------------------------------------------------------------ */
+
+const DIACRITICS = /[̀-ͯ]/g;
+
+export function slugify(text: string): string {
+  return text
+    .normalize("NFD")
+    .replace(DIACRITICS, "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/** Liste les headings (h1..h6) de l'éditeur avec leur slug. */
+export function collectHeadings(
+  editor: HTMLElement,
+): { label: string; slug: string }[] {
+  const out: { label: string; slug: string }[] = [];
+  const seen = new Map<string, number>();
+  editor.querySelectorAll("h1, h2, h3, h4, h5, h6").forEach((h) => {
+    const label = (h.textContent ?? "").trim();
+    if (!label) return;
+    let slug = h.id || slugify(label);
+    if (!slug) return;
+    const count = seen.get(slug) ?? 0;
+    if (count > 0) slug = `${slug}-${count}`;
+    seen.set(slug, count + 1);
+    out.push({ label, slug });
+  });
+  return out;
+}
+
+/** Met à jour les `id` des headings de l'éditeur, en évitant les doublons. */
+export function syncHeadingIds(editor: HTMLElement): void {
+  const seen = new Map<string, number>();
+  editor.querySelectorAll("h1, h2, h3, h4, h5, h6").forEach((h) => {
+    const label = (h.textContent ?? "").trim();
+    if (!label) {
+      h.removeAttribute("id");
+      return;
+    }
+    let slug = slugify(label);
+    if (!slug) {
+      h.removeAttribute("id");
+      return;
+    }
+    const count = seen.get(slug) ?? 0;
+    if (count > 0) slug = `${slug}-${count}`;
+    seen.set(slug, count + 1);
+    if (h.id !== slug) h.id = slug;
+  });
+}
+
+/** Insère un <a href title>label</a> à la position de déclenchement.
+ * Si une plage non-collapsed est fournie, son contenu est remplacé. */
+export function insertLink(
+  ctx: SlashCtx,
+  opts: {
+    url: string;
+    label: string;
+    /** Plage à remplacer (sélection initiale au moment du déclenchement). */
+    range?: Range;
+  },
+): HTMLAnchorElement | null {
+  const { editor } = ctx;
+  const url = opts.url.trim();
+  const label = opts.label.trim() || url;
+  if (!url) return null;
+
+  editor.focus();
+  const sel = window.getSelection();
+  if (!sel) return null;
+
+  // Restaure la plage cible si fournie, sinon utilise la sélection courante.
+  if (opts.range) {
+    sel.removeAllRanges();
+    sel.addRange(opts.range);
+  } else if (sel.rangeCount === 0) {
+    return null;
+  }
+
+  const range = sel.getRangeAt(0);
+  range.deleteContents();
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.title = url;
+  a.textContent = label;
+  range.insertNode(a);
+
+  const after = document.createRange();
+  after.setStartAfter(a);
+  after.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(after);
+
+  dispatchInput(editor);
+  return a;
+}
+
+/** Met à jour href/title/label d'un <a> existant. */
+export function updateLink(
+  editor: HTMLElement,
+  anchor: HTMLAnchorElement,
+  opts: { url: string; label: string },
+): void {
+  const url = opts.url.trim();
+  const label = opts.label.trim() || url;
+  if (!url) return;
+  anchor.setAttribute("href", url);
+  anchor.setAttribute("title", url);
+  anchor.textContent = label;
+  dispatchInput(editor);
+}
+
+/** Remplace un <a>texte</a> par son contenu textuel (rétrograde en texte normal). */
+export function unlinkAnchor(
+  editor: HTMLElement,
+  anchor: HTMLAnchorElement,
+): void {
+  const parent = anchor.parentNode;
+  if (!parent) return;
+  while (anchor.firstChild) parent.insertBefore(anchor.firstChild, anchor);
+  parent.removeChild(anchor);
+  dispatchInput(editor);
 }
 
 function getCurrentListItem(editor: HTMLElement): HTMLLIElement | null {

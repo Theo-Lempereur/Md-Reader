@@ -16,15 +16,10 @@ export type ToolbarAction =
   | "quote"
   | "link";
 
-export type ExportKind = "md" | "html" | "pdf" | "print" | "copy";
-
 type Props = {
   viewMode: ViewMode;
   onViewMode: (m: ViewMode) => void;
-  onExport: (k: ExportKind) => void;
   onAction: (a: ToolbarAction) => void;
-  exportOpen: boolean;
-  setExportOpen: (v: boolean) => void;
   pos: ToolbarPos;
 };
 
@@ -33,10 +28,7 @@ const keepFocus = (e: React.MouseEvent) => e.preventDefault();
 export function Toolbar({
   viewMode,
   onViewMode,
-  onExport,
   onAction,
-  exportOpen,
-  setExportOpen,
   pos,
 }: Props) {
   return (
@@ -171,52 +163,6 @@ export function Toolbar({
           >
             <Icon.Link />
           </button>
-        </div>
-        <div className="tb-spacer" />
-        <div className="export-wrap">
-          <button
-            className="tb-btn"
-            onClick={() => setExportOpen(!exportOpen)}
-            style={{ paddingLeft: 10, paddingRight: 8 }}
-          >
-            <Icon.Download />
-            <span style={{ marginLeft: 4 }}>Exporter</span>
-            <Icon.ChevronDown />
-          </button>
-          {exportOpen && (
-            <div
-              className="export-menu"
-              onMouseLeave={() => setExportOpen(false)}
-            >
-              <button onClick={() => onExport("md")}>
-                <span className="menu-icon">
-                  <Icon.FileText />
-                </span>
-                Markdown (.md)
-                <span className="kbd">⌘S</span>
-              </button>
-              <button onClick={() => onExport("html")}>
-                <span className="menu-icon">
-                  <Icon.Globe />
-                </span>
-                Page HTML
-              </button>
-              <hr />
-              <button onClick={() => onExport("print")}>
-                <span className="menu-icon">
-                  <Icon.Print />
-                </span>
-                Imprimer
-                <span className="kbd">⌘P</span>
-              </button>
-              <button onClick={() => onExport("copy")}>
-                <span className="menu-icon">
-                  <Icon.Copy />
-                </span>
-                Copier (HTML riche)
-              </button>
-            </div>
-          )}
         </div>
       </div>
     </div>
