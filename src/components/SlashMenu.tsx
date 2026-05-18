@@ -6,8 +6,10 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { copyImageAsset, openImageDialog } from "../lib/fileIo";
 import type { SlashCommand } from "../slash/commands";
 import type {
+  ImageFormPayload,
   LinkFormPayload,
   SlashState,
 } from "../slash/useSlashCommand";
@@ -18,6 +20,7 @@ type Props = {
   onPick: (index: number) => void;
   onSubmitTable: (rows: number, cols: number) => void;
   onSubmitLink: (payload: LinkFormPayload) => void;
+  onSubmitImage: (payload: ImageFormPayload) => void;
   onCancelForm: () => void;
 };
 
@@ -29,6 +32,7 @@ export function SlashMenu({
   onPick,
   onSubmitTable,
   onSubmitLink,
+  onSubmitImage,
   onCancelForm,
 }: Props) {
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -38,7 +42,9 @@ export function SlashMenu({
   const keepFocus = (e: React.MouseEvent) => {
     if (
       state.active &&
-      (state.mode === "table-form" || state.mode === "link-form")
+      (state.mode === "table-form" ||
+        state.mode === "link-form" ||
+        state.mode === "image-form")
     ) {
       return;
     }
@@ -109,6 +115,9 @@ export function SlashMenu({
           onSubmit={onSubmitLink}
           onCancel={onCancelForm}
         />
+      )}
+      {state.mode === "image-form" && (
+        <ImageForm onSubmit={onSubmitImage} onCancel={onCancelForm} />
       )}
     </div>
   );
@@ -421,6 +430,108 @@ function LinkForm({
           onClick={submit}
         >
           {editing ? "Mettre à jour" : "Insérer"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ImageForm({
+  onSubmit,
+  onCancel,
+}: {
+  onSubmit: (payload: ImageFormPayload) => void;
+  onCancel: () => void;
+}) {
+  const [src, setSrc] = useState("");
+  const [alt, setAlt] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const srcRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    srcRef.current?.focus();
+  }, []);
+
+  const browse = async () => {
+    if (busy) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const picked = await openImageDialog();
+      if (!picked) return;
+      const stored = await copyImageAsset(picked);
+      setSrc(stored);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = () => {
+    const trimmed = src.trim();
+    if (!trimmed) return;
+    onSubmit({ src: trimmed, alt: alt.trim() });
+  };
+
+  const onKey = (e: ReactKeyboardEvent<HTMLElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      submit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      onCancel();
+    }
+  };
+
+  return (
+    <div className="slash-menu-form slash-menu-form-image">
+      <div className="slash-menu-form-title">Insérer une image</div>
+      <label className="slash-menu-form-field">
+        Source
+        <div className="slash-menu-form-row-inline">
+          <input
+            ref={srcRef}
+            type="text"
+            value={src}
+            placeholder="https://… ou chemin local"
+            onChange={(e) => setSrc(e.target.value)}
+            onKeyDown={onKey}
+          />
+          <button
+            type="button"
+            className="browse-btn"
+            onClick={browse}
+            disabled={busy}
+            title="Choisir un fichier"
+          >
+            {busy ? "…" : "Parcourir…"}
+          </button>
+        </div>
+      </label>
+      <label className="slash-menu-form-field">
+        Texte alternatif
+        <input
+          type="text"
+          value={alt}
+          placeholder="Description (optionnel)"
+          onChange={(e) => setAlt(e.target.value)}
+          onKeyDown={onKey}
+        />
+      </label>
+      {error && <div className="slash-menu-form-error">{error}</div>}
+      <div className="slash-menu-form-actions">
+        <button type="button" onClick={onCancel}>
+          Annuler
+        </button>
+        <button
+          type="button"
+          className="primary"
+          onClick={submit}
+          disabled={!src.trim()}
+        >
+          Insérer
         </button>
       </div>
     </div>

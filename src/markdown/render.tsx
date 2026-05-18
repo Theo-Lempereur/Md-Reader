@@ -1,7 +1,7 @@
 import type { CSSProperties, MouseEvent, ReactNode } from "react";
 import katex from "katex";
 import { Icon } from "../components/Icons";
-import { slugify } from "../slash/runners";
+import { resolveImageSrcForDom, slugify } from "../slash/runners";
 
 export type BlockInfo = {
   key: number;
@@ -111,6 +111,20 @@ function splitInlineMath(text: string): InlineMathSegment[] {
 }
 
 const ESCAPABLE = /[\\`*_{}\[\]()#+\-.!|~<>]/;
+
+const IMG_ATTR_RE = /(\w[\w-]*)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
+
+function parseImgAttrs(tag: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  IMG_ATTR_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = IMG_ATTR_RE.exec(tag)) !== null) {
+    const key = m[1].toLowerCase();
+    const val = m[3] ?? m[4] ?? m[5] ?? "";
+    out[key] = val;
+  }
+  return out;
+}
 
 function findClosing(
   s: string,
@@ -228,6 +242,57 @@ export function inlineRender(text: string): ReactNode[] {
         if (end !== -1 && end > p + 1) {
           flush();
           out.push(<code key={key++}>{s.slice(p + 1, end)}</code>);
+          p = end + 1;
+          continue;
+        }
+      }
+
+      if (c === "!" && s[p + 1] === "[") {
+        const closeBracket = findClosing(s, p + 2, "]", true);
+        if (
+          closeBracket !== -1 &&
+          closeBracket > p + 2 &&
+          s[closeBracket + 1] === "("
+        ) {
+          const closeParen = findClosing(s, closeBracket + 2, ")", true);
+          if (closeParen !== -1) {
+            flush();
+            const alt = s.slice(p + 2, closeBracket);
+            const src = s.slice(closeBracket + 2, closeParen).trim();
+            const resolved = resolveImageSrcForDom(src);
+            out.push(
+              <img
+                key={key++}
+                data-src={src}
+                src={resolved}
+                alt={alt}
+                draggable={false}
+              />,
+            );
+            p = closeParen + 1;
+            continue;
+          }
+        }
+      }
+
+      if (c === "<" && /^<img\b/i.test(s.slice(p, p + 5))) {
+        const end = s.indexOf(">", p + 5);
+        if (end !== -1) {
+          const tag = s.slice(p, end + 1);
+          const attrs = parseImgAttrs(tag);
+          const src = attrs.src ?? "";
+          const resolved = resolveImageSrcForDom(src);
+          flush();
+          out.push(
+            <img
+              key={key++}
+              data-src={src}
+              src={resolved}
+              alt={attrs.alt ?? ""}
+              width={attrs.width ? Number(attrs.width) || undefined : undefined}
+              draggable={false}
+            />,
+          );
           p = end + 1;
           continue;
         }

@@ -23,6 +23,7 @@ import {
   clearTriggerText,
   collectHeadings,
   getCurrentTableCell,
+  insertImage,
   insertLink,
   insertTable,
   updateLink,
@@ -70,7 +71,26 @@ export type LinkFormMode = {
   headings: { label: string; slug: string }[];
 };
 
-export type SlashState = Inactive | ListMode | FormMode | LinkFormMode;
+export type ImageFormPayload = {
+  /** URL distante (http/https/data) ou chemin absolu local. */
+  src: string;
+  alt: string;
+};
+
+export type ImageFormMode = {
+  active: true;
+  mode: "image-form";
+  anchor: Anchor;
+  /** Plage où insérer l'image (sélection capturée au moment d'ouvrir). */
+  insertionRange: Range | null;
+};
+
+export type SlashState =
+  | Inactive
+  | ListMode
+  | FormMode
+  | LinkFormMode
+  | ImageFormMode;
 
 type Opts = {
   editorRef: RefObject<HTMLDivElement | null>;
@@ -92,10 +112,14 @@ export type SlashApi = {
   submitTableForm: (rows: number, cols: number) => void;
   /** Validation du sous-formulaire lien. */
   submitLinkForm: (payload: LinkFormPayload) => void;
-  /** Annulation du sous-formulaire (tableau ou lien). */
+  /** Validation du sous-formulaire image. */
+  submitImageForm: (payload: ImageFormPayload) => void;
+  /** Annulation du sous-formulaire (tableau, lien ou image). */
   cancelForm: () => void;
   /** Ouvre le formulaire de lien depuis l'extérieur (bouton toolbar, popover). */
   openLinkForm: (opts?: { editing?: HTMLAnchorElement }) => void;
+  /** Ouvre le formulaire d'image depuis l'extérieur. */
+  openImageForm: () => void;
 };
 
 /** Le `/` est-il en position de déclenchement ? Vrai si le caret est précédé
@@ -428,6 +452,22 @@ export function useSlashCommand({
         return;
       }
 
+      if (cmd.needsForm === "image") {
+        clearTriggerText(editor, s.triggerNode, s.triggerOffset);
+        const sel = window.getSelection();
+        let insertionRange: Range | null = null;
+        if (sel && sel.rangeCount > 0) {
+          insertionRange = sel.getRangeAt(0).cloneRange();
+        }
+        setState({
+          active: true,
+          mode: "image-form",
+          anchor: s.anchor,
+          insertionRange,
+        });
+        return;
+      }
+
       // Désactive le state d'abord pour éviter les re-rendus parasites
       setState({ active: false });
       cmd.run?.(ctx);
@@ -505,6 +545,50 @@ export function useSlashCommand({
     },
     [editorRef, onInput],
   );
+
+  const submitImageForm = useCallback(
+    (payload: ImageFormPayload) => {
+      const s = stateRef.current;
+      if (!s.active || s.mode !== "image-form") return;
+      const editor = editorRef.current;
+      if (!editor) return;
+      setState({ active: false });
+      editor.focus();
+      insertImage(
+        { editor, triggerNode: editor, triggerOffset: 0, onInput },
+        { src: payload.src, alt: payload.alt, range: s.insertionRange ?? undefined },
+      );
+      onInput?.();
+    },
+    [editorRef, onInput],
+  );
+
+  const openImageForm = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.focus();
+    const sel = window.getSelection();
+    let insertionRange: Range | null = null;
+    if (sel && sel.rangeCount > 0) {
+      const range = sel.getRangeAt(0);
+      if (editor.contains(range.startContainer)) {
+        insertionRange = range.cloneRange();
+      }
+    }
+    const a = computeAnchor();
+    const anchor =
+      a ??
+      (() => {
+        const r = editor.getBoundingClientRect();
+        return { x: r.left + 20, y: r.top + 20 };
+      })();
+    setState({
+      active: true,
+      mode: "image-form",
+      anchor,
+      insertionRange,
+    });
+  }, [editorRef]);
 
   const openLinkForm = useCallback(
     (opts?: { editing?: HTMLAnchorElement }) => {
@@ -717,7 +801,11 @@ export function useSlashCommand({
         return;
       }
 
-      if (s.mode === "table-form" || s.mode === "link-form") {
+      if (
+        s.mode === "table-form" ||
+        s.mode === "link-form" ||
+        s.mode === "image-form"
+      ) {
         // Les touches sont gérées dans le formulaire lui-même ; on ignore ici.
         return;
       }
@@ -793,8 +881,10 @@ export function useSlashCommand({
     pickIndex,
     submitTableForm,
     submitLinkForm,
+    submitImageForm,
     cancelForm,
     openLinkForm,
+    openImageForm,
   };
 }
 

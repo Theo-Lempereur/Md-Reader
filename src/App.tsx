@@ -46,6 +46,7 @@ import { PdfExportModal } from "./components/PdfExportModal";
 import { WindowControls } from "./components/WindowControls";
 import {
   basename,
+  exportEmbeddedMarkdownDialog,
   exportPdfDialog,
   openFileDialog,
   saveAsDialog,
@@ -1088,6 +1089,19 @@ function App() {
     };
   }, []);
 
+  const handleExportEmbeddedMd = useCallback(async () => {
+    const md = getActiveMarkdown();
+    if (md == null) return;
+    const tab = tabs.find((t) => t.id === activeId);
+    if (!tab) return;
+    try {
+      const content = normalizeMarkdown(md);
+      await exportEmbeddedMarkdownDialog(content, tab.name);
+    } catch (err) {
+      console.error("Export embarqué échoué:", err);
+    }
+  }, [activeId, tabs, getActiveMarkdown]);
+
   const handleSaveAs = useCallback(async () => {
     const md = getActiveMarkdown();
     if (md == null) return;
@@ -1482,6 +1496,7 @@ function App() {
           onSave={handleSave}
           onSaveAs={handleSaveAs}
           onExportPdf={() => setPdfModalOpen(true)}
+          onExportEmbeddedMd={handleExportEmbeddedMd}
           recents={recentPaths}
           onOpenRecent={handleOpenRecent}
         />

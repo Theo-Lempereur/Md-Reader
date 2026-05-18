@@ -1346,6 +1346,77 @@ body.ctrl-held .reading a:hover {
   outline: none;
   border-color: var(--accent, #79a8ff);
 }
+
+/* Formulaire d'image */
+.slash-menu-form-image {
+  min-width: 320px;
+}
+.slash-menu-form-row-inline {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+.slash-menu-form-row-inline input {
+  flex: 1;
+}
+.slash-menu-form-image .browse-btn {
+  padding: 5px 10px;
+  font-size: 12px;
+  background: var(--surface-2, #2a2a2a);
+  color: inherit;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.slash-menu-form-image .browse-btn:hover {
+  background: var(--accent-soft, rgba(120, 170, 255, 0.18));
+  border-color: var(--accent, #79a8ff);
+}
+.slash-menu-form-image .browse-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+.slash-menu-form-error {
+  font-size: 11px;
+  color: #ff6b6b;
+  margin: 4px 0 6px;
+}
+
+/* Images dans le rendu markdown */
+.reading img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  vertical-align: middle;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+.reading.wysiwyg img {
+  cursor: default;
+}
+
+/* Overlay de redimensionnement d'image */
+.image-resize-frame {
+  position: fixed;
+  pointer-events: none;
+  border: 2px solid var(--accent, #79a8ff);
+  border-radius: 2px;
+  box-sizing: border-box;
+  z-index: 9998;
+}
+.image-resize-handle {
+  position: fixed;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  margin-top: -5px;
+  background: var(--accent, #79a8ff);
+  border: 1px solid #fff;
+  border-radius: 2px;
+  z-index: 9999;
+}
+
 .reading strong {
   font-weight: 700;
   color: var(--text);

@@ -1,3 +1,4 @@
+import { convertFileSrc } from "@tauri-apps/api/core";
 import type { ToolbarAction } from "../components/Toolbar";
 
 /** Caractère marqueur utilisé dans les templates LaTeX pour indiquer les
@@ -361,6 +362,72 @@ export function insertLink(
 
   dispatchInput(editor);
   return a;
+}
+
+/** Vrai si `src` est une URL distante / data URI (et donc non convertible
+ * via `convertFileSrc`). */
+export function isRemoteImageSrc(src: string): boolean {
+  return /^(https?:|data:|blob:|asset:|http:\/\/asset\.localhost)/i.test(src);
+}
+
+/** Pour un `src` markdown (chemin absolu local ou URL distante), renvoie la
+ * valeur à utiliser comme `src` DOM dans la webview (asset protocol pour les
+ * chemins locaux). */
+export function resolveImageSrcForDom(src: string): string {
+  if (!src) return src;
+  if (isRemoteImageSrc(src)) return src;
+  try {
+    return convertFileSrc(src);
+  } catch {
+    return src;
+  }
+}
+
+/** Insère un <img> à la position du caret (ou remplace la plage fournie).
+ * Le `data-src` conserve la forme « markdown » (chemin absolu ou URL) ;
+ * `src` est la forme DOM (asset URL pour les locaux). */
+export function insertImage(
+  ctx: SlashCtx,
+  opts: {
+    src: string;
+    alt: string;
+    /** Plage à remplacer (sélection capturée au moment du déclenchement). */
+    range?: Range;
+  },
+): HTMLImageElement | null {
+  const { editor } = ctx;
+  const src = opts.src.trim();
+  if (!src) return null;
+  const alt = opts.alt.trim();
+
+  editor.focus();
+  const sel = window.getSelection();
+  if (!sel) return null;
+  if (opts.range) {
+    sel.removeAllRanges();
+    sel.addRange(opts.range);
+  } else if (sel.rangeCount === 0) {
+    return null;
+  }
+
+  const range = sel.getRangeAt(0);
+  range.deleteContents();
+
+  const img = document.createElement("img");
+  img.setAttribute("data-src", src);
+  img.setAttribute("src", resolveImageSrcForDom(src));
+  if (alt) img.setAttribute("alt", alt);
+  img.setAttribute("draggable", "false");
+  range.insertNode(img);
+
+  const after = document.createRange();
+  after.setStartAfter(img);
+  after.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(after);
+
+  dispatchInput(editor);
+  return img;
 }
 
 /** Met à jour href/title/label d'un <a> existant. */

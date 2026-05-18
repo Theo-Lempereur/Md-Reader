@@ -9,6 +9,7 @@ type Props = {
   onSave: () => void;
   onSaveAs: () => void;
   onExportPdf: () => void;
+  onExportEmbeddedMd: () => void;
   recents: string[];
   onOpenRecent: (path: string) => void;
 };
@@ -21,6 +22,7 @@ export function FileMenu({
   onSave,
   onSaveAs,
   onExportPdf,
+  onExportEmbeddedMd,
   recents,
   onOpenRecent,
 }: Props) {
@@ -96,6 +98,12 @@ export function FileMenu({
               <Icon.Download />
             </span>
             Exporter en PDF…
+          </button>
+          <button onClick={run(onExportEmbeddedMd)}>
+            <span className="menu-icon">
+              <Icon.Download />
+            </span>
+            Exporter avec images embarquées…
           </button>
         </div>
       )}

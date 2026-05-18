@@ -26,6 +26,78 @@ async fn write_text_file(path: String, content: String) -> Result<(), String> {
     std::fs::write(&path, content).map_err(|e| e.to_string())
 }
 
+fn image_mime_for(ext: &str) -> Option<&'static str> {
+    match ext.to_ascii_lowercase().as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "svg" => Some("image/svg+xml"),
+        "bmp" => Some("image/bmp"),
+        "ico" => Some("image/x-icon"),
+        "tif" | "tiff" => Some("image/tiff"),
+        _ => None,
+    }
+}
+
+fn assets_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("app_local_data_dir: {}", e))?;
+    let assets = dir.join("assets");
+    std::fs::create_dir_all(&assets).map_err(|e| format!("create assets dir: {}", e))?;
+    Ok(assets)
+}
+
+#[tauri::command]
+async fn copy_image_asset(app: tauri::AppHandle, src_path: String) -> Result<String, String> {
+    use sha1::{Digest, Sha1};
+
+    let src = PathBuf::from(&src_path);
+    if !src.is_file() {
+        return Err(format!("Fichier introuvable : {}", src_path));
+    }
+    let ext = src
+        .extension()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| "Extension manquante".to_string())?
+        .to_ascii_lowercase();
+    if image_mime_for(&ext).is_none() {
+        return Err(format!("Extension non supportée : {}", ext));
+    }
+
+    let data = std::fs::read(&src).map_err(|e| format!("read image: {}", e))?;
+    let mut hasher = Sha1::new();
+    hasher.update(&data);
+    let hash = hasher.finalize();
+    let hex = hash.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+
+    let dir = assets_dir(&app)?;
+    let dest = dir.join(format!("{}.{}", hex, ext));
+    if !dest.exists() {
+        std::fs::write(&dest, &data).map_err(|e| format!("write asset: {}", e))?;
+    }
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+async fn read_image_as_data_uri(path: String) -> Result<String, String> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    let p = PathBuf::from(&path);
+    let ext = p
+        .extension()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| "Extension manquante".to_string())?
+        .to_ascii_lowercase();
+    let mime = image_mime_for(&ext)
+        .ok_or_else(|| format!("Extension non supportée : {}", ext))?;
+    let data = std::fs::read(&p).map_err(|e| format!("read image: {}", e))?;
+    let b64 = STANDARD.encode(&data);
+    Ok(format!("data:{};base64,{}", mime, b64))
+}
+
 fn tweaks_file_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
@@ -449,7 +521,9 @@ pub fn run() {
             write_tweaks,
             read_session,
             write_session,
-            export_pdf
+            export_pdf,
+            copy_image_asset,
+            read_image_as_data_uri
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

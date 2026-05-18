@@ -50,6 +50,23 @@ td.addRule("horizontalRule", {
   replacement: () => "\n\n---\n\n",
 });
 
+td.addRule("image", {
+  filter: "img",
+  replacement: (_content, node) => {
+    const el = node as HTMLElement;
+    const dataSrc = el.getAttribute("data-src");
+    const src = (dataSrc && dataSrc.trim()) || el.getAttribute("src") || "";
+    const alt = el.getAttribute("alt") ?? "";
+    const widthAttr = el.getAttribute("width");
+    if (!src) return "";
+    if (widthAttr) {
+      const altEsc = alt.replace(/"/g, "&quot;");
+      return `<img src="${src}" alt="${altEsc}" width="${widthAttr}" />`;
+    }
+    return `![${alt}](${src})`;
+  },
+});
+
 // Tâches : <li><input type="checkbox" checked> texte</li> → "- [x] texte"
 td.addRule("taskListItem", {
   filter: (node) => {

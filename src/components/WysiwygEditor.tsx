@@ -18,6 +18,7 @@ import {
 import { useSlashCommand } from "../slash/useSlashCommand";
 import { SlashMenu } from "./SlashMenu";
 import { LinkPopover } from "./LinkPopover";
+import { ImageResizeOverlay } from "./ImageResizeOverlay";
 import type { ToolbarAction } from "./Toolbar";
 import type { PreviewCaret } from "../types";
 
@@ -45,6 +46,8 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
     const [activeLink, setActiveLink] = useState<HTMLAnchorElement | null>(
       null,
     );
+    const [selectedImage, setSelectedImage] =
+      useState<HTMLImageElement | null>(null);
 
     const slash = useSlashCommand({
       editorRef: divRef,
@@ -111,6 +114,68 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
       return () =>
         document.removeEventListener("selectionchange", onSelectionChange);
     }, [enabled]);
+
+    // Sélection d'image : `click` (= mouseup confirmé) → poignées apparaissent.
+    // Le `mousedown` se contente d'empêcher le drag natif de l'image et le
+    // placement de caret « dans » l'image — il ne sélectionne PAS, sinon
+    // l'overlay se monte pendant que le bouton est encore enfoncé et un
+    // mouvement immédiat de la souris peut frapper une poignée fraîchement
+    // rendue.
+    useEffect(() => {
+      if (!enabled) {
+        setSelectedImage(null);
+        return;
+      }
+      const el = divRef.current;
+      if (!el) return;
+
+      const onMouseDown = (e: MouseEvent) => {
+        const target = e.target;
+        if (!(target instanceof Element)) return;
+        if (target.closest(".image-resize-handle")) return;
+        const img = target.closest("img");
+        if (img instanceof HTMLImageElement && el.contains(img)) {
+          e.preventDefault();
+        }
+      };
+      const onClick = (e: MouseEvent) => {
+        const target = e.target;
+        if (!(target instanceof Element)) return;
+        if (target.closest(".image-resize-handle")) return;
+        const img = target.closest("img");
+        if (img instanceof HTMLImageElement && el.contains(img)) {
+          e.preventDefault();
+          setSelectedImage(img);
+          return;
+        }
+        setSelectedImage(null);
+      };
+      el.addEventListener("mousedown", onMouseDown);
+      el.addEventListener("click", onClick);
+      return () => {
+        el.removeEventListener("mousedown", onMouseDown);
+        el.removeEventListener("click", onClick);
+      };
+    }, [enabled]);
+
+    // Désélection via touche clavier (Échap, flèches…) — le clic ailleurs est
+    // déjà géré par l'`onClick` ci-dessus.
+    useEffect(() => {
+      if (!enabled || !selectedImage) return;
+      const handler = (e: KeyboardEvent) => {
+        if (
+          e.key === "Escape" ||
+          e.key === "ArrowLeft" ||
+          e.key === "ArrowRight" ||
+          e.key === "ArrowUp" ||
+          e.key === "ArrowDown"
+        ) {
+          setSelectedImage(null);
+        }
+      };
+      document.addEventListener("keydown", handler);
+      return () => document.removeEventListener("keydown", handler);
+    }, [enabled, selectedImage]);
 
     // Ctrl+clic sur un lien : ouvre l'URL (externe via Tauri) ou scroll (#ancre).
     useEffect(() => {
@@ -225,7 +290,9 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
     );
 
     const isFormOpen =
-      slash.state.active && slash.state.mode === "link-form";
+      slash.state.active &&
+      (slash.state.mode === "link-form" ||
+        slash.state.mode === "image-form");
 
     return (
       <>
@@ -244,6 +311,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
           onPick={slash.pickIndex}
           onSubmitTable={slash.submitTableForm}
           onSubmitLink={slash.submitLinkForm}
+          onSubmitImage={slash.submitImageForm}
           onCancelForm={slash.cancelForm}
         />
         {enabled && !isFormOpen && (
@@ -260,6 +328,12 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
                 onInput?.();
               }
             }}
+          />
+        )}
+        {enabled && !isFormOpen && (
+          <ImageResizeOverlay
+            anchor={selectedImage}
+            onCommit={() => onInput?.()}
           />
         )}
       </>
