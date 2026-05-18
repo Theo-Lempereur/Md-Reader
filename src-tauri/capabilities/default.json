@@ -17,6 +17,8 @@
     "fs:allow-read-text-file",
     "fs:allow-write-text-file",
     "fs:allow-exists",
-    "window-state:default"
+    "window-state:default",
+    "updater:default",
+    "process:default"
   ]
 }

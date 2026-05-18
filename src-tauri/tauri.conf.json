@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "md-reader-app",
+  "productName": "Md-Reader",
   "version": "0.1.0",
   "identifier": "com.theolempereur.mdreader",
   "build": {
@@ -27,7 +27,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "publisher": "Théo Lempereur",
+    "copyright": "© 2026 Théo Lempereur",
+    "shortDescription": "Lecteur Markdown moderne",
+    "longDescription": "Marque-page — lecteur et éditeur Markdown avec rendu live, support LaTeX et export PDF.",
+    "category": "Productivity",
     "fileAssociations": [
       {
         "ext": ["md", "markdown"],
@@ -42,6 +47,22 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false,
+        "languages": ["French", "English"]
+      }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/Theo-Lempereur/Md-Reader/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRGMjE3OTYwNTVFNjI2NjYKUldSbUp1WlZZSGtoVDJMdUNGMkFBZm0vT2JOY082UU5HZEFMS1BYdU4vZzlGS2lwYmlpaHhNYUwK"
+    }
   }
 }

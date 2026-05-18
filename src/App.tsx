@@ -53,6 +53,7 @@ import {
   writeToPath,
   type OpenedFile,
 } from "./lib/fileIo";
+import { useUpdater } from "./lib/useUpdater";
 import type {
   Density,
   FontVariant,
@@ -419,6 +420,7 @@ function App() {
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const [pdfModalOpen, setPdfModalOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const updater = useUpdater();
   const [searchQ, setSearchQ] = useState("");
   const [currentHit] = useState<SearchHit | null>(null);
   const [floatPos, setFloatPos] = useState<{ x: number; y: number } | null>(
@@ -1522,6 +1524,24 @@ function App() {
           >
             {tweaks.theme === "dark" ? <Icon.Sun /> : <Icon.Moon />}
           </button>
+          {updater.status === "available" && (
+            <button
+              className="icon-btn update-btn"
+              title={`Mise à jour disponible (v${updater.version}) — cliquer pour installer`}
+              onClick={updater.install}
+            >
+              <Icon.ArrowDownCircle />
+            </button>
+          )}
+          {updater.status === "downloading" && (
+            <button
+              className="icon-btn update-btn downloading"
+              title={`Téléchargement… ${Math.round(updater.progress * 100)}%`}
+              disabled
+            >
+              <Icon.ArrowDownCircle />
+            </button>
+          )}
           <div style={{ width: 6 }} />
           <button
             className={`edit-toggle ${editMode ? "on" : ""}`}

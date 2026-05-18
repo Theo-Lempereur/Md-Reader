@@ -317,6 +317,46 @@ button {
   height: 14px;
 }
 
+.icon-btn.update-btn {
+  color: var(--accent);
+  position: relative;
+}
+.icon-btn.update-btn::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 var(--accent);
+  animation: update-pulse 1.8s ease-out infinite;
+}
+.icon-btn.update-btn:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.icon-btn.update-btn.downloading {
+  opacity: 0.7;
+  cursor: progress;
+}
+.icon-btn.update-btn.downloading::after {
+  animation: none;
+}
+
+@keyframes update-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--accent-soft);
+  }
+  70% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
 .edit-toggle {
   display: inline-flex;
   align-items: center;

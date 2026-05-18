@@ -258,4 +258,14 @@ export const Icon = {
       <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" strokeLinecap="square" />
     </svg>
   ),
+  ArrowDownCircle: () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="12" cy="12" r="9" />
+      <path
+        d="M12 7v8M8 12l4 4 4-4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  ),
 };
