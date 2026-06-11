@@ -2057,7 +2057,7 @@ dependencies = [
 
 [[package]]
 name = "md-reader-app"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "base64 0.22.1",
  "pulldown-cmark",
