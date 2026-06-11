@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Icon } from "./Icons";
 import type { ToolbarPos, ViewMode } from "../types";
 
@@ -8,6 +9,7 @@ export type ToolbarAction =
   | "italic"
   | "strike"
   | "code"
+  | "clearFormat"
   | "h1"
   | "h2"
   | "h3"
@@ -31,6 +33,19 @@ export function Toolbar({
   onAction,
   pos,
 }: Props) {
+  // « Effacer le formatage » n'a de sens que sur une sélection non vide.
+  const [hasSelection, setHasSelection] = useState(false);
+  useEffect(() => {
+    const onSelectionChange = () => {
+      const sel = window.getSelection();
+      setHasSelection(!!sel && sel.rangeCount > 0 && !sel.isCollapsed);
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
+    onSelectionChange();
+    return () =>
+      document.removeEventListener("selectionchange", onSelectionChange);
+  }, []);
+
   return (
     <div className="toolbar-wrap" data-pos={pos}>
       <div className="toolbar">
@@ -100,6 +115,15 @@ export function Toolbar({
             onClick={() => onAction("code")}
           >
             <Icon.Code />
+          </button>
+          <button
+            className="tb-btn"
+            title="Effacer le formatage de la sélection"
+            disabled={!hasSelection}
+            onMouseDown={keepFocus}
+            onClick={() => onAction("clearFormat")}
+          >
+            <Icon.ClearFormat />
           </button>
         </div>
         <div className="tb-sep" />

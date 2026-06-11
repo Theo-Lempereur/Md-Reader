@@ -16,6 +16,17 @@ td.addRule("strikethrough", {
   replacement: (content) => `~~${content}~~`,
 });
 
+// Inline vides (résidus d'un mode format « live » jamais rempli) : ne pas
+// émettre de marqueurs orphelins type `****`.
+td.addRule("emptyInline", {
+  filter: (node) =>
+    node.nodeType === 1 &&
+    /^(STRONG|B|EM|I|DEL|S|STRIKE)$/.test(node.nodeName) &&
+    !(node.textContent ?? "").replace(/​/g, "").trim() &&
+    !(node as HTMLElement).querySelector("img, br"),
+  replacement: () => "",
+});
+
 td.addRule("math", {
   filter: (node) =>
     node.nodeType === 1 &&
@@ -126,6 +137,7 @@ td.addRule("table", {
 function markdownCell(cell: HTMLTableCellElement): string {
   return td
     .turndown(cell.innerHTML)
+    .replace(/​/g, "")
     .replace(/\n+/g, " ")
     .replace(/\|/g, "\\|")
     .trim();
@@ -150,5 +162,9 @@ function normalizeCells<T>(cells: T[], colCount: number): T[] {
 }
 
 export function htmlToMarkdown(html: string): string {
-  return normalizeMarkdown(td.turndown(html)).trim() + "\n";
+  // Les ZWSP servent de placeholders de caret dans l'éditeur (cellules,
+  // code inline, mode format live) et ne doivent jamais fuir en markdown.
+  return (
+    normalizeMarkdown(td.turndown(html)).replace(/​/g, "").trim() + "\n"
+  );
 }

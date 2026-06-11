@@ -102,6 +102,17 @@ export function jumpToNextPlaceholder(root: Node): boolean {
   return true;
 }
 
+/** Place le caret à la fin du contenu de `el`. */
+function placeCaretAtEndOf(el: HTMLElement) {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
 /** Insère un nœud HTML au caret et place le caret à l'intérieur (premier
  * descendant éditable). */
 function insertNodeAtCaret(node: Node) {
@@ -155,6 +166,9 @@ export function runWysiwygCommand(editor: HTMLElement, action: ToolbarAction) {
       return;
     case "link":
       // Cas géré au niveau supérieur (ouvre le formulaire de lien).
+      return;
+    case "clearFormat":
+      clearInlineFormat(editor);
       return;
     case "undo":
       document.execCommand("undo");
@@ -509,7 +523,13 @@ export function insertTable(
   }
   table.appendChild(tbody);
 
-  insertNodeAtCaret(table);
+  // Même structure que le rendu markdown (render.tsx) : sans ce wrapper, le
+  // tableau fraîchement inséré n'a ni cadre ni largeur minimale et s'affiche
+  // différemment jusqu'au prochain aller-retour par la source.
+  const wrap = document.createElement("div");
+  wrap.className = "md-table-wrap";
+  wrap.appendChild(table);
+  insertNodeAtCaret(wrap);
 
   const firstTh = table.querySelector("th");
   if (firstTh) {
@@ -581,13 +601,13 @@ export function addTableColumn(ctx: SlashCtx, table: HTMLTableElement) {
   dispatchInput(ctx.editor);
 }
 
-/** Ajoute une ligne au tbody (ou crée un tbody). */
-export function addTableRow(
-  ctx: SlashCtx,
+/** Ajoute une ligne au tbody (ou crée un tbody) — manipulation DOM pure,
+ * sans nettoyage de trigger slash. Utilisable hors contexte slash (navigation
+ * Ctrl+Entrée). Renvoie la ligne créée. */
+export function appendTableRow(
   table: HTMLTableElement,
   asHeader: boolean,
-) {
-  clearTriggerText(ctx.editor, ctx.triggerNode, ctx.triggerOffset);
+): HTMLTableRowElement {
   const colCount = computeColCount(table);
 
   const tr = document.createElement("tr");
@@ -613,6 +633,19 @@ export function addTableRow(
     }
     tbody.appendChild(tr);
   }
+  return tr;
+}
+
+/** Ajoute une ligne au tableau depuis une commande slash : nettoie d'abord le
+ * texte `/commande` tapé. NE PAS appeler avec un trigger synthétique
+ * (editor, 0) — clearTriggerText supprimerait tout le début du document. */
+export function addTableRow(
+  ctx: SlashCtx,
+  table: HTMLTableElement,
+  asHeader: boolean,
+) {
+  clearTriggerText(ctx.editor, ctx.triggerNode, ctx.triggerOffset);
+  appendTableRow(table, asHeader);
   dispatchInput(ctx.editor);
 }
 
@@ -631,6 +664,131 @@ export function runMappedCommand(ctx: SlashCtx, action: ToolbarAction) {
   ctx.editor.focus();
   runWysiwygCommand(ctx.editor, action);
   dispatchInput(ctx.editor);
+}
+
+/** /liste, /liste1 : convertit le bloc en liste puis place le caret en FIN
+ * d'item — execCommand le laisse collé au marqueur, en début de contenu. */
+export function runListCommand(ctx: SlashCtx, action: "ul" | "ol") {
+  clearTriggerText(ctx.editor, ctx.triggerNode, ctx.triggerOffset);
+  ctx.editor.focus();
+  document.execCommand(
+    action === "ul" ? "insertUnorderedList" : "insertOrderedList",
+  );
+  const li = getCurrentListItem(ctx.editor);
+  if (li) placeCaretAtEndOf(li);
+  dispatchInput(ctx.editor);
+}
+
+/** Retire tous les effets inline (gras, italique, barré, code, lien…) de la
+ * sélection courante. Les blocs (titres, listes) ne sont pas touchés —
+ * c'est le rôle de /clear sur le paragraphe. */
+export function clearInlineFormat(editor: HTMLElement): void {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+  if (!editor.contains(sel.getRangeAt(0).commonAncestorContainer)) return;
+
+  document.execCommand("removeFormat");
+  document.execCommand("unlink");
+
+  // removeFormat ne déballe pas toujours <code>/<del> : on les retire
+  // manuellement s'ils intersectent encore la sélection.
+  if (sel.rangeCount > 0) {
+    const range = sel.getRangeAt(0);
+    editor
+      .querySelectorAll<HTMLElement>("code, del, s, strike")
+      .forEach((el) => {
+        if (el.closest("pre")) return; // blocs de code intacts
+        if (!range.intersectsNode(el)) return;
+        const parent = el.parentNode;
+        if (!parent) return;
+        while (el.firstChild) parent.insertBefore(el.firstChild, el);
+        parent.removeChild(el);
+      });
+  }
+  dispatchInput(editor);
+}
+
+/* ------------------------------------------------------------------ */
+/* Mode format « live » (/gras, /italique, /barré)                     */
+/* Le texte tapé prend l'effet immédiatement, avec un marqueur visuel ; */
+/* Entrée (ou déplacement du caret hors de la zone) sort du mode.       */
+/* ------------------------------------------------------------------ */
+
+const LIVE_FORMAT_TAGS = {
+  bold: "strong",
+  italic: "em",
+  strike: "del",
+} as const;
+
+export type LiveFormatKind = keyof typeof LIVE_FORMAT_TAGS;
+
+export function startLiveFormat(ctx: SlashCtx, kind: LiveFormatKind) {
+  clearTriggerText(ctx.editor, ctx.triggerNode, ctx.triggerOffset);
+  ctx.editor.focus();
+  const el = document.createElement(LIVE_FORMAT_TAGS[kind]);
+  el.className = "fmt-live";
+  const zwsp = document.createTextNode("​");
+  el.appendChild(zwsp);
+  insertNodeAtCaret(el);
+  const sel = window.getSelection();
+  if (sel) {
+    const r = document.createRange();
+    r.setStart(zwsp, 1);
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+  dispatchInput(ctx.editor);
+}
+
+/** L'élément .fmt-live contenant le caret, ou null. */
+export function getActiveLiveFormat(editor: HTMLElement): HTMLElement | null {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return null;
+  const node = sel.getRangeAt(0).startContainer;
+  if (!editor.contains(node)) return null;
+  const start = node.nodeType === 1 ? (node as Element) : node.parentElement;
+  const live = start?.closest(".fmt-live");
+  return live instanceof HTMLElement && editor.contains(live) ? live : null;
+}
+
+/** Sort du mode live : retire le marqueur visuel et les ZWSP placeholder ;
+ * supprime l'élément s'il est resté vide. Si `placeCaretAfter`, le caret
+ * ressort juste après l'élément (sur un ZWSP neutre, pour que la frappe
+ * suivante n'hérite pas du format). */
+export function commitLiveFormat(
+  editor: HTMLElement,
+  live: HTMLElement,
+  placeCaretAfter: boolean,
+): void {
+  live.classList.remove("fmt-live");
+  if (!live.getAttribute("class")) live.removeAttribute("class");
+
+  const walker = document.createTreeWalker(live, NodeFilter.SHOW_TEXT);
+  const empties: Text[] = [];
+  while (walker.nextNode()) {
+    const t = walker.currentNode as Text;
+    if (t.data.includes("​")) t.data = t.data.replace(/​/g, "");
+    if (!t.data.length) empties.push(t);
+  }
+  empties.forEach((t) => t.remove());
+
+  const isEmpty = !(live.textContent || "").length;
+  const parent = live.parentNode;
+  if ((placeCaretAfter || isEmpty) && parent) {
+    const sel = window.getSelection();
+    if (sel) {
+      const after = document.createTextNode("​");
+      parent.insertBefore(after, live.nextSibling);
+      const r = document.createRange();
+      r.setStart(after, 1);
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+  }
+  if (isEmpty) live.remove();
+  dispatchInput(editor);
 }
 
 /** Échappe : ramène la « ligne » courante à un paragraphe normal et la sort
