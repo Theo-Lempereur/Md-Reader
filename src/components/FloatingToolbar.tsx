@@ -40,6 +40,13 @@ export function FloatingToolbar({ pos, onAction }: Props) {
       >
         <Icon.Code />
       </button>
+      <button
+        onMouseDown={keepFocus}
+        onClick={() => onAction("clearFormat")}
+        title="Effacer le formatage"
+      >
+        <Icon.ClearFormat />
+      </button>
       <span className="sep" />
       <button
         onMouseDown={keepFocus}

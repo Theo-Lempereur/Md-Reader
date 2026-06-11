@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -6,7 +7,6 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -25,13 +25,12 @@ import { normalizeMarkdown } from "./markdown/normalize";
 import { WELCOME_MD } from "./welcome";
 import { highlightSearch, tokenizeLine, marginIcon } from "./markdown/source";
 import {
-  insertBlankSrcLineBelow,
-  moveCaretToLineEnd,
-  moveCaretToNextSrcLine,
   readMarkdownFromSourceRoot,
   readSourceCaret,
   writeSourceCaret,
 } from "./markdown/sourceDom";
+import { useSourceEditing } from "./lib/useSourceEditing";
+import { useSourceUndo } from "./lib/useSourceUndo";
 import { Icon } from "./components/Icons";
 import { SourceView, type SourceViewHandle } from "./components/SourceView";
 import {
@@ -331,6 +330,116 @@ function centerOnEl(container: HTMLElement, el: HTMLElement) {
     el.offsetTop - container.clientHeight / 2 + el.offsetHeight / 2;
 }
 
+type SourceMiniHandlers = {
+  onInput: () => void;
+  onKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => void;
+  onPaste: (e: React.ClipboardEvent<HTMLDivElement>) => void;
+  onCopy: (e: React.ClipboardEvent<HTMLDivElement>) => void;
+  onCut: (e: React.ClipboardEvent<HTMLDivElement>) => void;
+};
+
+type SourceMiniLinesProps = {
+  /** Tant que cette valeur est stable, le sous-arbre n'est JAMAIS re-rendu. */
+  renderKey: number;
+  content: string;
+  startLine: number;
+  editable: boolean;
+  search?: string;
+  currentHit?: SearchHit | null;
+  currentSyncLine?: number | null;
+  lineToBlock?: Map<number, number>;
+  highlightedBlock?: number | null;
+  lineEls?: React.MutableRefObject<Map<number, HTMLDivElement>>;
+  onJumpToBlock?: (blockKey: number) => void;
+  rootRef: React.MutableRefObject<HTMLDivElement | null>;
+  handlers: SourceMiniHandlers;
+};
+
+/** Lignes du panneau source. Le DOM d'un contentEditable diverge de ce que
+ * React connaît dès la première frappe : re-réconcilier l'arbre provoque des
+ * NotFoundError (removeChild sur nœud détaché) — c'était LE crash du panneau
+ * latéral. Contrat : `memo` bloque tout re-render tant que `renderKey` est
+ * stable, et tout changement de `renderKey` s'accompagne d'un `key=` React
+ * différent → remplacement complet du sous-arbre, jamais de patch. */
+const SourceMiniLines = memo(
+  function SourceMiniLines(p: SourceMiniLinesProps) {
+    const lines = normalizeMarkdown(p.content).split("\n");
+    return (
+      <div
+        className={`source source-mini${p.editable ? " editable" : ""}`}
+        ref={p.rootRef}
+        contentEditable={p.editable}
+        suppressContentEditableWarning
+        spellCheck={false}
+        onInput={p.handlers.onInput}
+        onKeyDown={p.handlers.onKeyDown}
+        onPaste={p.handlers.onPaste}
+        onCopy={p.handlers.onCopy}
+        onCut={p.handlers.onCut}
+      >
+        {lines.map((line, i) => {
+          const absIdx = p.startLine + i;
+          const mi = marginIcon(line);
+          const blockKey = p.lineToBlock?.get(absIdx);
+          const hasJump = blockKey != null && !!p.onJumpToBlock;
+          const isHighlighted =
+            blockKey != null &&
+            p.highlightedBlock != null &&
+            blockKey === p.highlightedBlock;
+          return (
+            <div
+              key={i}
+              className={`src-line${p.currentSyncLine === absIdx ? " sync-current" : ""}${hasJump ? " src-line-has-jump" : ""}${isHighlighted ? " jump-highlight" : ""}`}
+              ref={
+                p.lineEls
+                  ? (el) => {
+                      if (el) p.lineEls!.current.set(absIdx, el as HTMLDivElement);
+                      else p.lineEls!.current.delete(absIdx);
+                    }
+                  : undefined
+              }
+            >
+              <div className="ln" contentEditable={false}>
+                {absIdx + 1}
+              </div>
+              <div
+                className={`margin-icon ${mi ? mi.cls : ""}`}
+                contentEditable={false}
+              >
+                {mi ? mi.label : ""}
+              </div>
+              <div className="src-content">
+                {p.search
+                  ? highlightSearch(line, p.search, absIdx, p.currentHit ?? null)
+                  : line
+                    ? tokenizeLine(line, absIdx)
+                    : <span>&#8203;</span>}
+              </div>
+              {hasJump && (
+                <div className="src-line-tools" contentEditable={false}>
+                  <button
+                    type="button"
+                    className="src-line-btn"
+                    title="Aligner la preview sur ce bloc"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      p.onJumpToBlock!(blockKey!);
+                    }}
+                  >
+                    <Icon.PanelLeft />
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  },
+  (prev, next) => prev.renderKey === next.renderKey,
+);
+
 function SourceMini({
   content,
   startLine = 0,
@@ -341,6 +450,7 @@ function SourceMini({
   search,
   currentHit,
   editable = false,
+  undoKey,
   onMarkdownChange,
   onJumpToBlock,
 }: {
@@ -355,118 +465,146 @@ function SourceMini({
   search?: string;
   currentHit?: SearchHit | null;
   editable?: boolean;
+  /** Cible éditée (bloc / document) : un changement vide l'historique d'annulation. */
+  undoKey?: string;
   onMarkdownChange?: (content: string) => void;
   onJumpToBlock?: (blockKey: number) => void;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const pendingCaretRef = useRef<SourceCaret | null>(null);
-  const lines = normalizeMarkdown(content).split("\n");
+  const pendingCaretRef = useRef<{
+    caret: SourceCaret | null;
+    hadFocus: boolean;
+  } | null>(null);
+  /** Dernier markdown émis vers le parent. Quand il revient en écho via la
+   * prop `content`, le DOM est déjà à jour : aucun re-render nécessaire. */
+  const lastEmittedRef = useRef<string | null>(null);
+  /** Le DOM a divergé du dernier rendu React (frappe / opération d'édition). */
+  const domDirtyRef = useRef(false);
+
+  // Décision de re-rendu calculée PENDANT le render (pas dans un effet : un
+  // effet arriverait après que React ait déjà patché l'arbre muté).
+  //  - écho de notre propre frappe → aucun re-render ;
+  //  - changement (contenu externe ou prop visuelle) sur DOM propre →
+  //    re-render normal (patch React, sûr et bon marché : scroll sync…) ;
+  //  - changement sur DOM divergé → REMPLACEMENT complet du sous-arbre (key).
+  const isEcho = content === lastEmittedRef.current;
+  const visualSig = [
+    search ?? "",
+    currentHit?.line ?? -1,
+    currentHit?.start ?? -1,
+    currentHit?.end ?? -1,
+    currentSyncLine ?? -1,
+    highlightedBlock ?? -1,
+    editable ? 1 : 0,
+    startLine,
+    lineToBlock ? 1 : 0,
+    undoKey ?? "",
+  ].join("|");
+  const renderKeyRef = useRef(0);
+  const remountIdRef = useRef(0);
+  const lastSigRef = useRef(visualSig);
+  const renderedContentRef = useRef(content);
+  if (
+    visualSig !== lastSigRef.current ||
+    (!isEcho && content !== renderedContentRef.current)
+  ) {
+    renderKeyRef.current += 1;
+    if (domDirtyRef.current) remountIdRef.current += 1;
+    lastSigRef.current = visualSig;
+    // L'écho étant synchrone, `content` reflète toujours le dernier état émis.
+    renderedContentRef.current = content;
+    // Le sous-arbre va être re-rendu (patché ou remplacé) : réaligné sur React.
+    domDirtyRef.current = false;
+  }
+  const renderKey = renderKeyRef.current;
+  const remountId = remountIdRef.current;
+
+  const undoApi = useSourceUndo({
+    rootRef,
+    content: renderedContentRef.current,
+    resetKey: undoKey,
+    onRestore: (md) => {
+      domDirtyRef.current = true;
+      lastEmittedRef.current = md;
+      onMarkdownChange?.(md);
+    },
+  });
+
   const emitMarkdownChange = useCallback(() => {
     if (!editable || !onMarkdownChange) return;
-    pendingCaretRef.current = readSourceCaret(rootRef.current);
-    onMarkdownChange(readMarkdownFromSourceRoot(rootRef.current, content));
-  }, [content, editable, onMarkdownChange]);
-  const handleKeyDown = useCallback(
-    (e: ReactKeyboardEvent<HTMLDivElement>) => {
-      if (!editable) return;
-      const root = rootRef.current;
-      if (!root) return;
-      const key = e.key;
-      const mod = e.ctrlKey || e.metaKey;
+    const root = rootRef.current;
+    domDirtyRef.current = true;
+    pendingCaretRef.current = {
+      caret: readSourceCaret(root),
+      hadFocus:
+        !!root &&
+        (document.activeElement === root ||
+          root.contains(document.activeElement)),
+    };
+    undoApi.scheduleCommit();
+    const md = readMarkdownFromSourceRoot(root, renderedContentRef.current);
+    lastEmittedRef.current = md;
+    onMarkdownChange(md);
+  }, [editable, onMarkdownChange, undoApi]);
 
-      if (mod && !e.altKey && !e.shiftKey && key === "Enter") {
-        if (moveCaretToNextSrcLine(root)) {
-          e.preventDefault();
-          emitMarkdownChange();
-        }
-        return;
-      }
-      if (e.altKey && !mod && !e.shiftKey && key === "Enter") {
-        if (insertBlankSrcLineBelow(root)) {
-          e.preventDefault();
-          emitMarkdownChange();
-        }
-        return;
-      }
-      if (mod && !e.altKey && !e.shiftKey && key.toLowerCase() === "l") {
-        if (moveCaretToLineEnd()) e.preventDefault();
-      }
-    },
-    [editable, emitMarkdownChange],
+  const editing = useSourceEditing({
+    rootRef,
+    enabled: editable,
+    onEdit: emitMarkdownChange,
+    onUndo: undoApi.undo,
+    onRedo: undoApi.redo,
+  });
+
+  // Le sous-arbre mémoïsé fige ses handlers au montage : on passe des
+  // wrappers stables qui délèguent aux versions à jour.
+  const handlersRef = useRef<SourceMiniHandlers>(null as never);
+  handlersRef.current = {
+    onInput: emitMarkdownChange,
+    onKeyDown: editing.onKeyDown,
+    onPaste: editing.onPaste,
+    onCopy: editing.onCopy,
+    onCut: editing.onCut,
+  };
+  const stableHandlers = useMemo<SourceMiniHandlers>(
+    () => ({
+      onInput: () => handlersRef.current.onInput(),
+      onKeyDown: (e) => handlersRef.current.onKeyDown(e),
+      onPaste: (e) => handlersRef.current.onPaste(e),
+      onCopy: (e) => handlersRef.current.onCopy(e),
+      onCut: (e) => handlersRef.current.onCut(e),
+    }),
+    [],
   );
 
+  // Après chaque remplacement du sous-arbre : restaure caret + focus s'ils
+  // étaient dans le panneau au moment de la dernière édition.
   useLayoutEffect(() => {
-    if (!editable || !pendingCaretRef.current) return;
-    writeSourceCaret(rootRef.current, pendingCaretRef.current);
+    const pending = pendingCaretRef.current;
     pendingCaretRef.current = null;
-  }, [content, editable]);
+    if (!editable || !pending?.hadFocus) return;
+    const root = rootRef.current;
+    if (!root) return;
+    root.focus();
+    if (pending.caret) writeSourceCaret(root, pending.caret);
+  }, [remountId, editable]);
 
   return (
-    <div
-      className={`source source-mini${editable ? " editable" : ""}`}
-      ref={rootRef}
-      contentEditable={editable}
-      suppressContentEditableWarning
-      spellCheck={false}
-      onInput={emitMarkdownChange}
-      onKeyDown={handleKeyDown}
-    >
-      {lines.map((line, i) => {
-        const absIdx = startLine + i;
-        const mi = marginIcon(line);
-        const blockKey = lineToBlock?.get(absIdx);
-        const hasJump = blockKey != null && !!onJumpToBlock;
-        const isHighlighted =
-          blockKey != null && highlightedBlock != null && blockKey === highlightedBlock;
-        return (
-          <div
-            key={i}
-            className={`src-line${currentSyncLine === absIdx ? " sync-current" : ""}${hasJump ? " src-line-has-jump" : ""}${isHighlighted ? " jump-highlight" : ""}`}
-            ref={
-              lineEls
-                ? (el) => {
-                    if (el) lineEls.current.set(absIdx, el as HTMLDivElement);
-                    else lineEls.current.delete(absIdx);
-                  }
-                : undefined
-            }
-          >
-            <div className="ln" contentEditable={false}>
-              {absIdx + 1}
-            </div>
-            <div
-              className={`margin-icon ${mi ? mi.cls : ""}`}
-              contentEditable={false}
-            >
-              {mi ? mi.label : ""}
-            </div>
-            <div className="src-content">
-              {search
-                ? highlightSearch(line, search, absIdx, currentHit ?? null)
-                : line
-                  ? tokenizeLine(line, absIdx)
-                  : <span>&#8203;</span>}
-            </div>
-            {hasJump && (
-              <div className="src-line-tools" contentEditable={false}>
-                <button
-                  type="button"
-                  className="src-line-btn"
-                  title="Aligner la preview sur ce bloc"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onJumpToBlock!(blockKey!);
-                  }}
-                >
-                  <Icon.PanelLeft />
-                </button>
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
+    <SourceMiniLines
+      key={remountId}
+      renderKey={renderKey}
+      content={renderedContentRef.current}
+      startLine={startLine}
+      editable={editable}
+      search={search}
+      currentHit={currentHit}
+      currentSyncLine={currentSyncLine}
+      lineToBlock={lineToBlock}
+      highlightedBlock={highlightedBlock}
+      lineEls={lineEls}
+      onJumpToBlock={onJumpToBlock}
+      rootRef={rootRef}
+      handlers={stableHandlers}
+    />
   );
 }
 
@@ -707,7 +845,21 @@ function App() {
   );
 
   const syncActivePreviewContent = useCallback(() => {
-    if (!editMode || sourceVisible) return;
+    if (!editMode) return;
+    // Vue source : flush du DOM vers l'état AVANT que la recherche ne
+    // déclenche un re-rendu des lignes (le DOM édité serait écrasé).
+    if (sourceVisible) {
+      const md = sourceRef.current?.getMarkdown();
+      if (md == null) return;
+      const content = normalizeMarkdown(md);
+      setTabs((prev) =>
+        prev.map((t) =>
+          t.id === activeId && t.content !== content ? { ...t, content } : t,
+        ),
+      );
+      wysiwygHandles.current.get(activeId)?.refreshFromContent(content);
+      return;
+    }
     const md = wysiwygHandles.current.get(activeId)?.getMarkdown();
     if (md == null) return;
     const content = normalizeMarkdown(md);
@@ -877,20 +1029,25 @@ function App() {
   // si des onglets sont dirty, on affiche un popup au lieu de quitter.
   useEffect(() => {
     let cancelled = false;
-    getCurrentWindow()
-      .onCloseRequested((event) => {
-        const dirty = tabsRef.current.filter((t) => t.dirty);
-        if (dirty.length === 0) return;
-        event.preventDefault();
-        setAppCloseConfirm(dirty);
-      })
-      .then((fn) => {
-        if (cancelled) fn();
-        else closeListenerUnlistenRef.current = fn;
-      })
-      .catch((err) =>
-        console.error("Enregistrement onCloseRequested échoué:", err),
-      );
+    try {
+      // getCurrentWindow() jette hors contexte Tauri (dev navigateur).
+      getCurrentWindow()
+        .onCloseRequested((event) => {
+          const dirty = tabsRef.current.filter((t) => t.dirty);
+          if (dirty.length === 0) return;
+          event.preventDefault();
+          setAppCloseConfirm(dirty);
+        })
+        .then((fn) => {
+          if (cancelled) fn();
+          else closeListenerUnlistenRef.current = fn;
+        })
+        .catch((err) =>
+          console.error("Enregistrement onCloseRequested échoué:", err),
+        );
+    } catch (err) {
+      console.warn("Fenêtre Tauri indisponible :", err);
+    }
     return () => {
       cancelled = true;
       closeListenerUnlistenRef.current?.();
@@ -2054,6 +2211,7 @@ function App() {
               content={active.content}
               search={searchQ}
               currentHit={currentHit}
+              undoKey={active.id}
               onInput={() => {
                 clearSideSourceDraft(active.id);
                 markDirty(active.id);
@@ -2202,6 +2360,7 @@ function App() {
                         search={searchQ}
                         currentHit={currentHit}
                         editable={editMode}
+                        undoKey={`${active.id}-block-${sidePanel.block.key}`}
                         onMarkdownChange={updateFromSideSource}
                       />
                     ) : (
@@ -2215,6 +2374,7 @@ function App() {
                         search={searchQ}
                         currentHit={currentHit}
                         editable={editMode}
+                        undoKey={`${active.id}-full`}
                         onMarkdownChange={updateFromSideSource}
                         onJumpToBlock={jumpToBlock}
                       />

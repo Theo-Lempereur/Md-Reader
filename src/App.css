@@ -696,6 +696,10 @@ button {
   background: var(--surface-2);
   color: var(--text);
 }
+.tb-btn:disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
 .tb-btn.active {
   background: var(--accent-soft);
   color: var(--accent);
@@ -1511,6 +1515,21 @@ body.ctrl-held .reading a:hover {
 .reading th:last-child,
 .reading td:last-child {
   border-right: none;
+}
+/* Cellules vides : conserve une pleine hauteur de ligne. Sans contenu, la
+   ligne s'écrase sous la taille du curseur et devient impossible à viser. */
+.reading th:empty::before,
+.reading td:empty::before {
+  content: "\200b";
+}
+
+/* Mode format « live » (/gras, /italique, /barré) : le texte tapé prend
+   l'effet immédiatement ; le halo indique qu'Entrée sort du mode. */
+.reading .fmt-live {
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--accent-soft), 0 1px 0 0 var(--accent);
+  border-radius: 3px;
+  padding: 0 2px;
 }
 .reading tbody tr:last-child td {
   border-bottom: none;

@@ -3,20 +3,20 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
   useRef,
-  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { normalizeMarkdown } from "../markdown/normalize";
 import { highlightSearch, marginIcon, tokenizeLine } from "../markdown/source";
 import {
   findSrcContent,
-  insertBlankSrcLineBelow,
-  moveCaretToLineEnd,
-  moveCaretToNextSrcLine,
   readMarkdownFromSourceRoot,
   readSourceCaret,
   writeSourceCaret,
 } from "../markdown/sourceDom";
+import { useSourceEditing } from "../lib/useSourceEditing";
+import { useSourceUndo } from "../lib/useSourceUndo";
 import type { SearchHit, SourceCaret } from "../types";
 import type { ToolbarAction } from "./Toolbar";
 
@@ -35,19 +35,90 @@ type Props = {
   content: string;
   search: string;
   currentHit: SearchHit | null;
+  /** Identifiant de la cible éditée (onglet) : un changement vide l'historique d'annulation. */
+  undoKey?: string;
   onInput?: () => void;
 };
 
 export const SourceView = forwardRef<SourceViewHandle, Props>(
-  function SourceView({ content, search, currentHit, onInput }, ref) {
+  function SourceView({ content, search, currentHit, undoKey, onInput }, ref) {
     const rootRef = useRef<HTMLDivElement | null>(null);
+
+    const normalizedContent = normalizeMarkdown(content);
+
+    const undo = useSourceUndo({
+      rootRef,
+      content: normalizedContent,
+      resetKey: undoKey,
+      onRestore: () => onInput?.(),
+    });
+
+    const notifyEdit = useCallback(() => {
+      undo.scheduleCommit();
+      onInput?.();
+    }, [undo, onInput]);
+
+    const editing = useSourceEditing({
+      rootRef,
+      onEdit: notifyEdit,
+      onUndo: undo.undo,
+      onRedo: undo.redo,
+    });
+
+    // Le DOM d'un contentEditable diverge de ce que React connaît dès la
+    // première frappe : re-réconcilier provoque des NotFoundError. À chaque
+    // changement de rendu (contenu flushé, recherche), on REMONTE donc le
+    // sous-arbre complet (clé), en capturant caret/focus juste avant.
+    const remountIdRef = useRef(0);
+    const remountInfoRef = useRef<{
+      caret: SourceCaret | null;
+      hadFocus: boolean;
+    }>({ caret: null, hadFocus: false });
+    const remountKey = useMemo(() => {
+      const root = rootRef.current;
+      remountInfoRef.current = {
+        caret: root ? readSourceCaret(root) : null,
+        hadFocus:
+          !!root &&
+          (document.activeElement === root ||
+            root.contains(document.activeElement)),
+      };
+      return ++remountIdRef.current;
+      // Dépendances par VALEUR : l'identité de currentHit change à chaque
+      // recalcul des hits, pas forcément sa position.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [
+      normalizedContent,
+      search,
+      currentHit?.line,
+      currentHit?.start,
+      currentHit?.end,
+    ]);
+
+    useLayoutEffect(() => {
+      const info = remountInfoRef.current;
+      remountInfoRef.current = { caret: null, hadFocus: false };
+      if (!info.hadFocus || !info.caret) return;
+      const root = rootRef.current;
+      if (!root) return;
+      root.focus();
+      writeSourceCaret(root, info.caret);
+    }, [remountKey]);
 
     useImperativeHandle(
       ref,
       () => ({
         executeCommand: (action) => {
+          if (action === "undo") {
+            undo.undo();
+            return;
+          }
+          if (action === "redo") {
+            undo.redo();
+            return;
+          }
           runSourceCommand(action);
-          onInput?.();
+          notifyEdit();
         },
         getMarkdown: () => {
           return readMarkdownFromSourceRoot(rootRef.current, content);
@@ -67,7 +138,7 @@ export const SourceView = forwardRef<SourceViewHandle, Props>(
         },
         focus: () => rootRef.current?.focus(),
       }),
-      [content, onInput],
+      [content, notifyEdit, undo],
     );
 
     useEffect(() => {
@@ -78,47 +149,19 @@ export const SourceView = forwardRef<SourceViewHandle, Props>(
       }
     }, [currentHit]);
 
-    const handleKeyDown = useCallback(
-      (e: ReactKeyboardEvent<HTMLDivElement>) => {
-        const root = rootRef.current;
-        if (!root) return;
-        const key = e.key;
-        const mod = e.ctrlKey || e.metaKey;
-
-        if (mod && !e.altKey && !e.shiftKey && key === "Enter") {
-          if (moveCaretToNextSrcLine(root)) {
-            e.preventDefault();
-            onInput?.();
-          }
-          return;
-        }
-        if (e.altKey && !mod && !e.shiftKey && key === "Enter") {
-          if (insertBlankSrcLineBelow(root)) {
-            e.preventDefault();
-            onInput?.();
-          }
-          return;
-        }
-        if (mod && !e.altKey && !e.shiftKey && key.toLowerCase() === "l") {
-          if (moveCaretToLineEnd()) {
-            e.preventDefault();
-          }
-          return;
-        }
-      },
-      [onInput],
-    );
-
-    const normalizedContent = normalizeMarkdown(content);
     const lines = normalizedContent.split("\n");
     return (
       <div
+        key={remountKey}
         className="source"
         ref={rootRef}
         contentEditable
         suppressContentEditableWarning
-        onInput={onInput}
-        onKeyDown={handleKeyDown}
+        onInput={notifyEdit}
+        onKeyDown={editing.onKeyDown}
+        onPaste={editing.onPaste}
+        onCopy={editing.onCopy}
+        onCut={editing.onCut}
       >
         {lines.map((line, i) => {
           const mi = marginIcon(line);
@@ -240,16 +283,6 @@ function runSourceCommand(action: ToolbarAction) {
       sel.removeAllRanges();
       sel.addRange(after);
     }
-    return;
-  }
-
-  // undo / redo : délégué au contentEditable natif via le navigateur.
-  if (action === "undo") {
-    document.execCommand("undo");
-    return;
-  }
-  if (action === "redo") {
-    document.execCommand("redo");
     return;
   }
 }

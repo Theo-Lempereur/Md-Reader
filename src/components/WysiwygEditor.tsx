@@ -1,9 +1,12 @@
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useRef,
   useState,
+  type ClipboardEvent as ReactClipboardEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { normalizeMarkdown } from "../markdown/normalize";
@@ -55,6 +58,110 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
       onInput,
     });
 
+    /* --------------------------------------------------------------- */
+    /* Undo/redo maison.                                                */
+    /* L'historique natif du contentEditable est corrompu par toutes    */
+    /* les mutations DOM programmatiques (slash commands, insertions de */
+    /* tableaux, refreshFromContent…) : on snapshotte innerHTML + caret */
+    /* à chaque rafale d'édition et on restaure nous-mêmes.             */
+    /* --------------------------------------------------------------- */
+    const undoPast = useRef<WysiwygSnapshot[]>([]);
+    const undoFuture = useRef<WysiwygSnapshot[]>([]);
+    const undoCurrent = useRef<WysiwygSnapshot | null>(null);
+    const undoTimer = useRef<number | null>(null);
+
+    const undoCommitNow = useCallback(() => {
+      if (undoTimer.current != null) {
+        window.clearTimeout(undoTimer.current);
+        undoTimer.current = null;
+      }
+      const el = divRef.current;
+      if (!el) return;
+      const snap: WysiwygSnapshot = {
+        html: el.innerHTML,
+        caret: readPreviewCaret(el),
+      };
+      if (undoCurrent.current && undoCurrent.current.html === snap.html) {
+        // Pas de changement de contenu : rafraîchit juste le caret mémorisé.
+        undoCurrent.current = snap;
+        return;
+      }
+      if (undoCurrent.current) {
+        undoPast.current.push(undoCurrent.current);
+        if (undoPast.current.length > UNDO_MAX_STEPS) undoPast.current.shift();
+        undoFuture.current = [];
+      }
+      undoCurrent.current = snap;
+    }, []);
+
+    const scheduleUndoCommit = useCallback(() => {
+      if (undoTimer.current != null) window.clearTimeout(undoTimer.current);
+      undoTimer.current = window.setTimeout(() => {
+        undoTimer.current = null;
+        undoCommitNow();
+      }, UNDO_DEBOUNCE_MS);
+    }, [undoCommitNow]);
+
+    const applyUndoSnapshot = useCallback(
+      (snap: WysiwygSnapshot) => {
+        const el = divRef.current;
+        if (!el) return;
+        el.innerHTML = snap.html;
+        syncHeadingIds(el);
+        if (snap.caret) writePreviewCaret(el, snap.caret);
+        setSelectedImage(null);
+        onInput?.();
+      },
+      [onInput],
+    );
+
+    /** Après application d'un snapshot, mémorise la forme RELUE du DOM :
+     * le navigateur normalise le HTML injecté (et syncHeadingIds le
+     * retouche), donc la chaîne relue diffère de celle stockée. Sans cette
+     * resynchronisation, le commit suivant croit voir une nouvelle édition,
+     * vide la pile redo et boucle entre deux formes du même état — c'était
+     * le « Ctrl+Z bloqué après 1 ou 2 retours ». */
+    const resyncCurrentAfterApply = useCallback((snap: WysiwygSnapshot) => {
+      undoCurrent.current = {
+        html: divRef.current?.innerHTML ?? snap.html,
+        caret: snap.caret,
+      };
+    }, []);
+
+    const undoEdit = useCallback(() => {
+      undoCommitNow();
+      const prev = undoPast.current.pop();
+      if (!prev || !undoCurrent.current) return;
+      undoFuture.current.push(undoCurrent.current);
+      applyUndoSnapshot(prev);
+      resyncCurrentAfterApply(prev);
+    }, [applyUndoSnapshot, resyncCurrentAfterApply, undoCommitNow]);
+
+    const redoEdit = useCallback(() => {
+      undoCommitNow();
+      const next = undoFuture.current.pop();
+      if (!next || !undoCurrent.current) return;
+      undoPast.current.push(undoCurrent.current);
+      applyUndoSnapshot(next);
+      resyncCurrentAfterApply(next);
+    }, [applyUndoSnapshot, resyncCurrentAfterApply, undoCommitNow]);
+
+    useEffect(() => {
+      return () => {
+        if (undoTimer.current != null) window.clearTimeout(undoTimer.current);
+      };
+    }, []);
+
+    // Chaque édition (frappe ou commande programmatique via dispatchInput)
+    // programme un commit de snapshot.
+    useEffect(() => {
+      const el = divRef.current;
+      if (!el || !enabled) return;
+      const handler = () => scheduleUndoCommit();
+      el.addEventListener("input", handler);
+      return () => el.removeEventListener("input", handler);
+    }, [enabled, scheduleUndoCommit]);
+
     // Mount une seule fois : pose le HTML rendu depuis le markdown source.
     // Les changements ultérieurs d'initialContent NE REJOUENT PAS — sinon une
     // sauvegarde (qui met à jour tab.content) écraserait les modifs DOM en cours.
@@ -66,6 +173,9 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
       );
       syncHeadingIds(divRef.current);
       mountedRef.current = true;
+      undoPast.current = [];
+      undoFuture.current = [];
+      undoCurrent.current = { html: divRef.current.innerHTML, caret: null };
     }, [initialContent]);
 
     // Resynchronise les `id` des headings à chaque édition (debounce léger).
@@ -242,6 +352,115 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
       return attachMathDoubleClick(el);
     }, [enabled]);
 
+    // Collage : interprète le markdown (ChatGPT & co fournissent le markdown
+    // brut en text/plain) ou convertit le HTML riche, au lieu de laisser le
+    // contentEditable coller du texte plat sans mise en forme.
+    const handlePaste = useCallback(
+      (e: ReactClipboardEvent<HTMLDivElement>) => {
+        if (!enabled) return;
+        const el = divRef.current;
+        if (!el) return;
+        const dt = e.clipboardData;
+        if (!dt) return;
+        const plain = dt.getData("text/plain");
+        const html = dt.getData("text/html");
+
+        // Dans une cellule, un bloc de code ou une formule : texte brut
+        // uniquement (les blocs markdown y casseraient la structure).
+        const sel = window.getSelection();
+        const startNode =
+          sel && sel.rangeCount > 0 ? sel.getRangeAt(0).startContainer : null;
+        const startEl =
+          startNode?.nodeType === 1
+            ? (startNode as Element)
+            : startNode?.parentElement;
+        if (startEl?.closest("td, th, pre, code, .math-edit")) {
+          if (!plain) return;
+          e.preventDefault();
+          const text = startEl.closest("td, th")
+            ? plain.replace(/\s*\n+\s*/g, " ")
+            : plain;
+          document.execCommand("insertText", false, text);
+          return;
+        }
+
+        let md: string | null = null;
+        if (plain && looksLikeMarkdownPaste(plain)) md = plain;
+        else if (html && /<\s*(p|h[1-6]|ul|ol|li|table|pre|blockquote|img|a|strong|em|b|i|code)\b/i.test(html)) {
+          md = htmlToMarkdown(html);
+        }
+
+        if (md != null) {
+          e.preventDefault();
+          insertMarkdownAtCaret(el, md);
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          return;
+        }
+        if (plain) {
+          e.preventDefault();
+          document.execCommand("insertText", false, plain);
+        }
+      },
+      [enabled],
+    );
+
+    // Copie : fournit aussi le markdown en text/plain (au lieu du texte nu),
+    // pour que « copier depuis Md Reader → coller ailleurs » garde la forme.
+    const handleCopy = useCallback(
+      (e: ReactClipboardEvent<HTMLDivElement>) => {
+        const el = divRef.current;
+        const sel = window.getSelection();
+        if (!el || !sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+        const range = sel.getRangeAt(0);
+        if (!el.contains(range.commonAncestorContainer)) return;
+        const container = document.createElement("div");
+        container.appendChild(range.cloneContents());
+        if (!container.innerHTML) return;
+        e.preventDefault();
+        e.clipboardData?.setData("text/html", container.innerHTML);
+        e.clipboardData?.setData(
+          "text/plain",
+          htmlToMarkdown(container.innerHTML).trimEnd(),
+        );
+      },
+      [],
+    );
+
+    const handleCut = useCallback(
+      (e: ReactClipboardEvent<HTMLDivElement>) => {
+        if (!enabled) {
+          handleCopy(e);
+          return;
+        }
+        handleCopy(e);
+        if (e.defaultPrevented) {
+          document.execCommand("delete");
+        }
+      },
+      [enabled, handleCopy],
+    );
+
+    const handleKeyDown = useCallback(
+      (e: ReactKeyboardEvent<HTMLDivElement>) => {
+        if (enabled) {
+          const mod = e.ctrlKey || e.metaKey;
+          if (mod && !e.altKey && e.key.toLowerCase() === "z") {
+            e.preventDefault();
+            if (e.shiftKey) redoEdit();
+            else undoEdit();
+            return;
+          }
+          if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "y") {
+            e.preventDefault();
+            redoEdit();
+            return;
+          }
+        }
+        slash.handleKeyDown(e);
+      },
+      [enabled, redoEdit, slash, undoEdit],
+    );
+
     useImperativeHandle(
       ref,
       () => ({
@@ -250,6 +469,14 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
           const el = divRef.current;
           if (!el) return;
           el.focus();
+          if (action === "undo") {
+            undoEdit();
+            return;
+          }
+          if (action === "redo") {
+            redoEdit();
+            return;
+          }
           if (action === "link") {
             const sel = window.getSelection();
             const insideLink =
@@ -277,16 +504,20 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
         },
         refreshFromContent: (content) => {
           if (!divRef.current) return;
+          // Commit l'état courant AVANT de réécrire, pour que le
+          // remplacement externe soit une étape d'historique annulable.
+          undoCommitNow();
           const normalizedContent = normalizeMarkdown(content);
           divRef.current.innerHTML = renderToStaticMarkup(
             <>{renderMarkdown(normalizedContent)}</>,
           );
           syncHeadingIds(divRef.current);
+          scheduleUndoCommit();
         },
         getCaret: () => readPreviewCaret(divRef.current),
         setCaret: (c) => writePreviewCaret(divRef.current, c),
       }),
-      [onInput, slash],
+      [onInput, slash, redoEdit, undoEdit, undoCommitNow, scheduleUndoCommit],
     );
 
     const isFormOpen =
@@ -302,8 +533,11 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
           contentEditable={enabled}
           suppressContentEditableWarning
           spellCheck={enabled}
-          onKeyDown={slash.handleKeyDown}
+          onKeyDown={handleKeyDown}
           onBlur={slash.handleBlur}
+          onPaste={handlePaste}
+          onCopy={handleCopy}
+          onCut={handleCut}
         />
         <SlashMenu
           state={slash.state}
@@ -340,6 +574,101 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
     );
   },
 );
+
+type WysiwygSnapshot = { html: string; caret: PreviewCaret | null };
+
+const UNDO_MAX_STEPS = 200;
+const UNDO_DEBOUNCE_MS = 350;
+
+/** Heuristique : le texte collé mérite-t-il un rendu markdown ?
+ * Multi-ligne → toujours (il faut au minimum des paragraphes). Sinon on
+ * cherche de la syntaxe block ou inline. */
+function looksLikeMarkdownPaste(text: string): boolean {
+  if (text.includes("\n")) return true;
+  if (/^\s{0,3}(#{1,6}\s|```|~~~|>\s|[-*+]\s|\d+[.)]\s|\|)/.test(text)) {
+    return true;
+  }
+  return /\*\*[^*]+\*\*|\*[^*\s][^*]*\*|__[^_]+__|~~[^~]+~~|`[^`]+`|!?\[[^\]]+\]\([^)]+\)|\$[^$]+\$/.test(
+    text,
+  );
+}
+
+/** Insère un markdown rendu (HTML) à la position du caret.
+ * - Un seul paragraphe → insertion inline au fil du texte.
+ * - Plusieurs blocs → insérés après le bloc top-level courant. */
+function insertMarkdownAtCaret(editor: HTMLElement, md: string): void {
+  const sel = window.getSelection();
+  if (!sel) return;
+  let range: Range;
+  if (
+    sel.rangeCount > 0 &&
+    editor.contains(sel.getRangeAt(0).startContainer)
+  ) {
+    range = sel.getRangeAt(0);
+  } else {
+    range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+  }
+  range.deleteContents();
+
+  const html = renderToStaticMarkup(
+    <>{renderMarkdown(normalizeMarkdown(md))}</>,
+  );
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
+
+  const blocks = Array.from(tpl.content.children);
+  if (blocks.length === 1 && blocks[0].tagName === "P") {
+    // Contenu inline : on déballe le <p> et on insère au fil du texte.
+    const p = blocks[0];
+    const frag = document.createDocumentFragment();
+    while (p.firstChild) frag.appendChild(p.firstChild);
+    const lastNode = frag.lastChild;
+    range.insertNode(frag);
+    if (lastNode) {
+      const after = document.createRange();
+      after.setStartAfter(lastNode);
+      after.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(after);
+    }
+    return;
+  }
+
+  // Plusieurs blocs : insertion après le bloc top-level contenant le caret.
+  let topBlock: Node | null = range.startContainer;
+  while (topBlock && topBlock.parentNode !== editor) {
+    topBlock = topBlock.parentNode;
+  }
+
+  const nodes = Array.from(tpl.content.childNodes);
+  const refNode: Node | null = topBlock ? topBlock.nextSibling : null;
+  for (const n of nodes) {
+    editor.insertBefore(n, refNode);
+  }
+
+  // Si le bloc d'origine était vide (paragraphe placeholder), on le retire.
+  if (
+    topBlock instanceof HTMLElement &&
+    !(topBlock.textContent || "").replace(/​/g, "").trim() &&
+    !topBlock.querySelector("img, table, hr, input")
+  ) {
+    topBlock.remove();
+  }
+
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    const lastEl = nodes[i];
+    if (lastEl instanceof HTMLElement) {
+      const after = document.createRange();
+      after.selectNodeContents(lastEl);
+      after.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(after);
+      break;
+    }
+  }
+}
 
 function readPreviewCaret(root: HTMLDivElement | null): PreviewCaret | null {
   if (!root) return null;

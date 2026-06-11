@@ -2,11 +2,22 @@ import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Icon } from "./Icons";
 
+/** getCurrentWindow() jette hors contexte Tauri (dev navigateur) : on ne
+ * doit jamais laisser ça faire tomber tout le rendu de l'app. */
+function tryGetCurrentWindow() {
+  try {
+    return getCurrentWindow();
+  } catch {
+    return null;
+  }
+}
+
 export function WindowControls() {
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
-    const win = getCurrentWindow();
+    const win = tryGetCurrentWindow();
+    if (!win) return;
     let unlisten: (() => void) | undefined;
 
     win.isMaximized().then(setMaximized).catch(() => {});
@@ -24,10 +35,9 @@ export function WindowControls() {
     };
   }, []);
 
-  const win = getCurrentWindow();
-  const onMinimize = () => win.minimize();
-  const onToggleMaximize = () => win.toggleMaximize();
-  const onClose = () => win.close();
+  const onMinimize = () => void tryGetCurrentWindow()?.minimize();
+  const onToggleMaximize = () => void tryGetCurrentWindow()?.toggleMaximize();
+  const onClose = () => void tryGetCurrentWindow()?.close();
 
   return (
     <div className="win-controls">

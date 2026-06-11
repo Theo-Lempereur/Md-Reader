@@ -19,9 +19,11 @@ import {
   SLASH_MATH_COMMANDS,
 } from "./math";
 import {
-  addTableRow,
   clearTriggerText,
   collectHeadings,
+  commitLiveFormat,
+  dispatchInput,
+  getActiveLiveFormat,
   getCurrentTableCell,
   insertImage,
   insertLink,
@@ -228,20 +230,44 @@ function moveCaretToBlockEnd(editor: HTMLElement): boolean {
   return true;
 }
 
+/** Bloc top-level représentant le tableau : son wrapper .md-table-wrap si
+ * présent, sinon le <table> lui-même. */
+function tableOuterBlock(table: HTMLTableElement): HTMLElement {
+  const parent = table.parentElement;
+  return parent?.classList.contains("md-table-wrap") ? parent : table;
+}
+
+/** Sort du tableau vers le bas : caret au début du bloc suivant, ou crée un
+ * <p> vide juste après le tableau (hors wrapper, sinon le paragraphe
+ * resterait coincé dans le cadre du tableau). */
+function exitTableBelow(table: HTMLTableElement): { created: boolean } {
+  const outer = tableOuterBlock(table);
+  const next = outer.nextElementSibling;
+  if (next instanceof HTMLElement) {
+    placeCaretAtStart(next);
+    return { created: false };
+  }
+  const p = document.createElement("p");
+  p.appendChild(document.createElement("br"));
+  outer.parentNode?.insertBefore(p, outer.nextSibling);
+  placeCaretAtStart(p);
+  return { created: true };
+}
+
 /** Tab dans un tableau : cellule suivante, ou sortie du tableau. */
 function moveToNextCell(
   cell: HTMLTableCellElement,
-): { exited: boolean } {
+): { exited: boolean; created: boolean } {
   const nextCell = cell.nextElementSibling;
   if (nextCell instanceof HTMLTableCellElement) {
     placeCaretAtStart(nextCell);
-    return { exited: false };
+    return { exited: false, created: false };
   }
   const row = cell.parentElement;
   const nextRow = row?.nextElementSibling;
   if (nextRow instanceof HTMLTableRowElement && nextRow.cells.length > 0) {
     placeCaretAtStart(nextRow.cells[0]);
-    return { exited: false };
+    return { exited: false, created: false };
   }
   // Dernière cellule de la dernière ligne du tbody : essaie d'aller au tbody
   // suivant (peu fréquent) puis sort du tableau.
@@ -251,17 +277,13 @@ function moveToNextCell(
     const firstCell = nextSection.querySelector<HTMLTableCellElement>("td, th");
     if (firstCell) {
       placeCaretAtStart(firstCell);
-      return { exited: false };
+      return { exited: false, created: false };
     }
   }
-  // Sortie : créer un <p> juste après le <table>.
   const table = cell.closest("table");
-  if (!table || !table.parentNode) return { exited: true };
-  const p = document.createElement("p");
-  p.appendChild(document.createElement("br"));
-  table.parentNode.insertBefore(p, table.nextSibling);
-  placeCaretAtStart(p);
-  return { exited: true };
+  if (!table) return { exited: true, created: false };
+  const res = exitTableBelow(table as HTMLTableElement);
+  return { exited: true, created: res.created };
 }
 
 /** Shift+Tab dans un tableau : cellule précédente. */
@@ -280,9 +302,9 @@ function moveToPrevCell(cell: HTMLTableCellElement): boolean {
   return false;
 }
 
-/** Ctrl+Entrée dans un tableau : descend dans la même colonne, ou crée une ligne. */
+/** Ctrl+Entrée dans un tableau : descend dans la même colonne ; sur la
+ * dernière ligne, SORT du tableau (l'ajout de lignes passe par /ligne). */
 function moveToCellBelow(
-  ctx: SlashCtx,
   cell: HTMLTableCellElement,
 ): { created: boolean } | null {
   const row = cell.parentElement;
@@ -310,17 +332,11 @@ function moveToCellBelow(
       }
     }
   }
-  // Pas de ligne suivante : on en crée une dans le tbody du tableau.
+  // Dernière ligne : sortie du tableau (caret sur le bloc suivant, ou
+  // création d'un paragraphe vide après le tableau).
   const table = cell.closest("table");
   if (!table) return null;
-  addTableRow(ctx, table as HTMLTableElement, false);
-  const lastRow = table.tBodies[0]?.rows[table.tBodies[0].rows.length - 1];
-  const created = lastRow?.cells[colIdx] ?? lastRow?.cells[0];
-  if (created) {
-    placeCaretAtStart(created);
-    return { created: true };
-  }
-  return null;
+  return exitTableBelow(table as HTMLTableElement);
 }
 
 function computeAnchor(): Anchor | null {
@@ -666,6 +682,24 @@ export function useSlashCommand({
     return () => editor.removeEventListener("input", handler);
   }, [editorRef]);
 
+  /** Sort automatiquement du mode format « live » quand le caret quitte la
+   * zone (clic ailleurs, flèches…) — sinon le marqueur visuel persisterait. */
+  useEffect(() => {
+    if (!enabled) return;
+    const handler = () => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      const lives = editor.querySelectorAll<HTMLElement>(".fmt-live");
+      if (!lives.length) return;
+      const active = getActiveLiveFormat(editor);
+      lives.forEach((live) => {
+        if (live !== active) commitLiveFormat(editor, live, false);
+      });
+    };
+    document.addEventListener("selectionchange", handler);
+    return () => document.removeEventListener("selectionchange", handler);
+  }, [enabled, editorRef]);
+
   /** Repositionne le menu si la sélection change (utile quand l'user clique
    * autre part dans le doc). */
   useEffect(() => {
@@ -708,16 +742,10 @@ export function useSlashCommand({
         if (mod && !e.altKey && !e.shiftKey && e.key === "Enter") {
           const cell = getCurrentTableCell(editor);
           if (cell) {
-            const ctx: SlashCtx = {
-              editor,
-              triggerNode: editor,
-              triggerOffset: 0,
-              onInput,
-            };
-            const res = moveToCellBelow(ctx, cell);
+            const res = moveToCellBelow(cell);
             if (res) {
               e.preventDefault();
-              if (res.created) onInput?.();
+              if (res.created) dispatchInput(editor);
               return;
             }
           } else {
@@ -744,7 +772,7 @@ export function useSlashCommand({
             }
             const res = moveToNextCell(cell);
             e.preventDefault();
-            if (res.exited) onInput?.();
+            if (res.created) dispatchInput(editor);
             return;
           }
         }
@@ -770,6 +798,22 @@ export function useSlashCommand({
               e.preventDefault();
               return;
             }
+          }
+        }
+        // Mode format « live » (/gras, /italique, /barré) : Entrée sort du
+        // mode au lieu de créer un nouveau bloc.
+        if (
+          e.key === "Enter" &&
+          !e.ctrlKey &&
+          !e.metaKey &&
+          !e.altKey &&
+          !e.shiftKey
+        ) {
+          const live = getActiveLiveFormat(editor);
+          if (live) {
+            e.preventDefault();
+            commitLiveFormat(editor, live, true);
+            return;
           }
         }
         if (e.key === "/" && !e.ctrlKey && !e.metaKey && !e.altKey) {
