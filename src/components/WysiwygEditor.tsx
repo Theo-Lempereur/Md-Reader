@@ -392,7 +392,17 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
 
         if (md != null) {
           e.preventDefault();
-          insertMarkdownAtCaret(el, md);
+          try {
+            insertMarkdownAtCaret(el, md);
+          } catch (err) {
+            // Filet de sécurité : aucune conversion / insertion ne doit
+            // pouvoir faire planter l'app. On retombe sur du texte brut.
+            console.error(
+              "Collage markdown échoué, repli sur texte brut :",
+              err,
+            );
+            document.execCommand("insertText", false, plain || md);
+          }
           el.dispatchEvent(new Event("input", { bubbles: true }));
           return;
         }
@@ -637,13 +647,30 @@ function insertMarkdownAtCaret(editor: HTMLElement, md: string): void {
   }
 
   // Plusieurs blocs : insertion après le bloc top-level contenant le caret.
-  let topBlock: Node | null = range.startContainer;
-  while (topBlock && topBlock.parentNode !== editor) {
-    topBlock = topBlock.parentNode;
+  // ⚠ Le caret peut être posé DIRECTEMENT dans l'éditeur (document vide ou
+  // curseur entre deux blocs) : dans ce cas range.startContainer === editor.
+  // Il ne faut alors PAS remonter la chaîne des parents (sinon on sort de
+  // l'éditeur et `insertBefore` lève NotFoundError → crash de l'app).
+  let topBlock: Node | null = null;
+  let refNode: Node | null = null;
+  if (range.startContainer === editor) {
+    // Insertion à la position du caret entre les enfants de l'éditeur.
+    refNode = editor.childNodes[range.startOffset] ?? null;
+  } else {
+    topBlock = range.startContainer;
+    while (topBlock && topBlock.parentNode && topBlock.parentNode !== editor) {
+      topBlock = topBlock.parentNode;
+    }
+    if (topBlock && topBlock.parentNode === editor) {
+      refNode = topBlock.nextSibling;
+    } else {
+      // On n'a jamais atteint un enfant direct de l'éditeur : on ajoute à la fin.
+      topBlock = null;
+      refNode = null;
+    }
   }
 
   const nodes = Array.from(tpl.content.childNodes);
-  const refNode: Node | null = topBlock ? topBlock.nextSibling : null;
   for (const n of nodes) {
     editor.insertBefore(n, refNode);
   }
