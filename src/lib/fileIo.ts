@@ -12,6 +12,9 @@ const MD_FILTERS = [
   { name: "Markdown", extensions: ["md", "markdown", "txt"] },
 ];
 
+// À l'enregistrement on ne propose que du Markdown : un .txt importé devient .md.
+const MD_SAVE_FILTERS = [{ name: "Markdown", extensions: ["md", "markdown"] }];
+
 const IMAGE_FILTERS = [
   {
     name: "Image",
@@ -48,7 +51,7 @@ export async function saveAsDialog(
 ): Promise<string | null> {
   const target = await save({
     defaultPath: suggestedName,
-    filters: MD_FILTERS,
+    filters: MD_SAVE_FILTERS,
   });
   if (!target) return null;
   await invoke("write_text_file", { path: target, content });
@@ -147,7 +150,7 @@ export async function exportEmbeddedMarkdownDialog(
   const baseName = suggestedName.replace(/\.(md|markdown|txt)$/i, "");
   const target = await save({
     defaultPath: `${baseName}.embedded.md`,
-    filters: MD_FILTERS,
+    filters: MD_SAVE_FILTERS,
   });
   if (!target) return null;
   const embedded = await embedLocalImages(content);

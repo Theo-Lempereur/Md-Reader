@@ -687,8 +687,11 @@ export function renderMarkdown(
       i++;
       continue;
     }
-    // Paragraph
-    const ps: string[] = [];
+    // Paragraph — la première ligne est toujours consommée : si une ligne
+    // ressemble à un début de bloc sans qu'aucun handler ne l'ait prise, on
+    // évite ainsi une boucle infinie (gel de l'app).
+    const ps: string[] = [line];
+    i++;
     while (
       i < lines.length &&
       lines[i].trim() !== "" &&
@@ -798,7 +801,8 @@ export function parseBlockBounds(md: string): BlockBounds[] {
       i++;
       continue;
     }
-    // Paragraph
+    // Paragraph (première ligne toujours consommée, cf. renderMarkdown)
+    i++;
     while (
       i < lines.length &&
       lines[i].trim() !== "" &&

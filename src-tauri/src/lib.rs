@@ -16,9 +16,30 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+/// Lit un fichier texte sans échouer sur l'encodage : les `.txt` téléchargés
+/// depuis une messagerie ne sont pas toujours en UTF-8 (UTF-16 avec BOM,
+/// ANSI…). Les octets invalides sont remplacés plutôt que de refuser le fichier.
+fn read_text_lossy(path: &Path) -> std::io::Result<String> {
+    let bytes = std::fs::read(path)?;
+    let decode_utf16 = |data: &[u8], le: bool| {
+        let units: Vec<u16> = data
+            .chunks_exact(2)
+            .map(|c| if le { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) })
+            .collect();
+        String::from_utf16_lossy(&units)
+    };
+    let text = match bytes.as_slice() {
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        [0xFF, 0xFE, rest @ ..] => decode_utf16(rest, true),
+        [0xFE, 0xFF, rest @ ..] => decode_utf16(rest, false),
+        _ => String::from_utf8_lossy(&bytes).into_owned(),
+    };
+    Ok(text)
+}
+
 #[tauri::command]
 async fn read_text_file(path: String) -> Result<String, String> {
-    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+    read_text_lossy(Path::new(&path)).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -304,7 +325,11 @@ async fn export_pdf(
 fn is_markdown_path(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
+        .is_some_and(|ext| {
+            ["md", "markdown", "txt"]
+                .iter()
+                .any(|known| ext.eq_ignore_ascii_case(known))
+        })
 }
 
 fn resolve_markdown_arg(arg: &str, cwd: Option<&Path>) -> Option<PathBuf> {
@@ -330,7 +355,7 @@ fn resolve_markdown_arg(arg: &str, cwd: Option<&Path>) -> Option<PathBuf> {
 }
 
 fn open_file_in_app(app: &tauri::AppHandle, path: PathBuf) {
-    let Ok(content) = std::fs::read_to_string(&path) else {
+    let Ok(content) = read_text_lossy(&path) else {
         return;
     };
     let Some(window) = app.get_webview_window("main") else {

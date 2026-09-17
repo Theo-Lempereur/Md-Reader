@@ -1376,6 +1376,26 @@ function App() {
 
   const addOrFocusTab = useCallback(
     (f: OpenedFile) => {
+      // Un .txt (souvent du Markdown reçu par messagerie) est importé dans un
+      // nouveau document non sauvegardé, comme "Nouveau" : le fichier d'origine
+      // n'est jamais modifié et la première sauvegarde propose un .md.
+      if (/\.txt$/i.test(f.path)) {
+        const id = `import-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const nextTabs = [
+          ...tabsRef.current,
+          {
+            id,
+            name: f.name.replace(/\.txt$/i, ".md"),
+            content: normalizeMarkdown(f.content),
+            dirty: true,
+          },
+        ];
+        tabsRef.current = nextTabs;
+        setTabs(nextTabs);
+        setActiveId(id);
+        return;
+      }
+
       bumpRecent(f.path);
       const existing = tabsRef.current.find((t) => t.path === f.path);
       if (existing) {
