@@ -11,7 +11,9 @@ import { normalizeMarkdown } from "../markdown/normalize";
 import { highlightSearch, marginIcon, tokenizeLine } from "../markdown/source";
 import {
   findSrcContent,
+  insertTextAtSourceCaret,
   readMarkdownFromSourceRoot,
+  rebuildSourceDom,
   readSourceCaret,
   writeSourceCaret,
 } from "../markdown/sourceDom";
@@ -29,6 +31,15 @@ export type SourceViewHandle = {
   setScrollTop: (top: number) => void;
   scrollToLine: (line: number) => void;
   focus: () => void;
+  /** Fige l'état courant dans la pile d'annulation (avant une modification
+   * externe, pour qu'un seul Ctrl+Z la défasse). */
+  pushUndoSnapshot: () => void;
+  /** Remplace tout le contenu en une seule étape d'annulation (même chemin
+   * que la restauration d'un instantané : reconstruction du DOM source). */
+  replaceContent: (md: string) => void;
+  /** Insère du texte (éventuellement multi-lignes) au caret courant. */
+  insertText: (text: string) => boolean;
+  getRoot: () => HTMLDivElement | null;
 };
 
 type Props = {
@@ -137,6 +148,25 @@ export const SourceView = forwardRef<SourceViewHandle, Props>(
           }
         },
         focus: () => rootRef.current?.focus(),
+        pushUndoSnapshot: () => undo.commitNow(),
+        replaceContent: (md) => {
+          const root = rootRef.current;
+          if (!root) return;
+          const caret = readSourceCaret(root);
+          undo.commitNow();
+          rebuildSourceDom(root, normalizeMarkdown(md));
+          if (caret) writeSourceCaret(root, caret);
+          // Deuxième commit : l'état remplacé devient une étape d'historique.
+          undo.commitNow();
+          onInput?.();
+        },
+        insertText: (text) => {
+          const root = rootRef.current;
+          if (!root || !insertTextAtSourceCaret(root, text)) return false;
+          notifyEdit();
+          return true;
+        },
+        getRoot: () => rootRef.current,
       }),
       [content, notifyEdit, undo],
     );

@@ -34,6 +34,12 @@ export type WysiwygEditorHandle = {
   refreshFromContent: (content: string) => void;
   getCaret: () => PreviewCaret | null;
   setCaret: (c: PreviewCaret) => void;
+  /** Fige l'état courant dans la pile d'annulation (avant une modification
+   * externe, pour qu'un seul Ctrl+Z la défasse). */
+  pushUndoSnapshot: () => void;
+  /** Insère du markdown rendu au caret courant, comme un collage. */
+  insertMarkdown: (md: string) => void;
+  getRoot: () => HTMLDivElement | null;
 };
 
 type Props = {
@@ -78,7 +84,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
       const el = divRef.current;
       if (!el) return;
       const snap: WysiwygSnapshot = {
-        html: el.innerHTML,
+        html: snapshotHtml(el),
         caret: readPreviewCaret(el),
       };
       if (undoCurrent.current && undoCurrent.current.html === snap.html) {
@@ -123,7 +129,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
      * le « Ctrl+Z bloqué après 1 ou 2 retours ». */
     const resyncCurrentAfterApply = useCallback((snap: WysiwygSnapshot) => {
       undoCurrent.current = {
-        html: divRef.current?.innerHTML ?? snap.html,
+        html: divRef.current ? snapshotHtml(divRef.current) : snap.html,
         caret: snap.caret,
       };
     }, []);
@@ -526,6 +532,19 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
         },
         getCaret: () => readPreviewCaret(divRef.current),
         setCaret: (c) => writePreviewCaret(divRef.current, c),
+        pushUndoSnapshot: () => undoCommitNow(),
+        insertMarkdown: (md) => {
+          const el = divRef.current;
+          if (!el) return;
+          try {
+            insertMarkdownAtCaret(el, md);
+          } catch (err) {
+            console.error("Insertion markdown échouée, repli sur texte brut :", err);
+            document.execCommand("insertText", false, md);
+          }
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+        },
+        getRoot: () => divRef.current,
       }),
       [onInput, slash, redoEdit, undoEdit, undoCommitNow, scheduleUndoCommit],
     );
@@ -586,6 +605,15 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(
 );
 
 type WysiwygSnapshot = { html: string; caret: PreviewCaret | null };
+
+/** innerHTML de l'éditeur, sans le texte fantôme de l'autocomplétion IA :
+ * un instantané d'annulation ne doit jamais le restaurer. */
+function snapshotHtml(el: HTMLElement): string {
+  if (!el.querySelector("[data-ai-ghost]")) return el.innerHTML;
+  const clone = el.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll("[data-ai-ghost]").forEach((g) => g.remove());
+  return clone.innerHTML;
+}
 
 const UNDO_MAX_STEPS = 200;
 const UNDO_DEBOUNCE_MS = 350;

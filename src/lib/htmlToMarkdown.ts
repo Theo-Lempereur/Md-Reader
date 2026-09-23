@@ -16,6 +16,13 @@ td.addRule("strikethrough", {
   replacement: (content) => `~~${content}~~`,
 });
 
+// Texte fantôme de l'autocomplétion IA : purement visuel, jamais du contenu.
+td.addRule("aiGhost", {
+  filter: (node) =>
+    node.nodeType === 1 && (node as HTMLElement).hasAttribute("data-ai-ghost"),
+  replacement: () => "",
+});
+
 // Inline vides (résidus d'un mode format « live » jamais rempli) : ne pas
 // émettre de marqueurs orphelins type `****`.
 td.addRule("emptyInline", {

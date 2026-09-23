@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "gpuHeadroomGb": 1.5,
+  "models": [
+    {
+      "id": "qwen3-1.7b",
+      "label": "Qwen3 1.7B",
+      "roles": ["chat", "complete"],
+      "vision": false,
+      "contextWindow": 32768,
+      "notes": "Très léger, multilingue.",
+      "variants": [{ "quant": "Q4_K_M", "tag": "qwen3:1.7b", "sizeGb": 1.4 }]
+    },
+    {
+      "id": "qwen3-4b",
+      "label": "Qwen3 4B",
+      "roles": ["chat"],
+      "vision": false,
+      "contextWindow": 32768,
+      "notes": "Bon compromis pour les petites cartes.",
+      "variants": [
+        { "quant": "Q4_K_M", "tag": "qwen3:4b", "sizeGb": 2.5 },
+        { "quant": "Q8_0", "tag": "qwen3:4b-q8_0", "sizeGb": 4.4 }
+      ]
+    },
+    {
+      "id": "qwen3-8b",
+      "label": "Qwen3 8B",
+      "roles": ["chat"],
+      "vision": false,
+      "contextWindow": 32768,
+      "notes": "Rédaction et reformulation solides en français.",
+      "variants": [
+        { "quant": "Q4_K_M", "tag": "qwen3:8b", "sizeGb": 5.2 },
+        { "quant": "Q8_0", "tag": "qwen3:8b-q8_0", "sizeGb": 8.9 }
+      ]
+    },
+    {
+      "id": "qwen3-14b",
+      "label": "Qwen3 14B",
+      "roles": ["chat"],
+      "vision": false,
+      "contextWindow": 32768,
+      "notes": "Plus fin sur les longues réécritures.",
+      "variants": [
+        { "quant": "Q4_K_M", "tag": "qwen3:14b", "sizeGb": 9.3 },
+        { "quant": "Q8_0", "tag": "qwen3:14b-q8_0", "sizeGb": 16 }
+      ]
+    },
+    {
+      "id": "qwen3-32b",
+      "label": "Qwen3 32B",
+      "roles": ["chat"],
+      "vision": false,
+      "contextWindow": 32768,
+      "notes": "Réservé aux cartes 24 Go.",
+      "variants": [{ "quant": "Q4_K_M", "tag": "qwen3:32b", "sizeGb": 20 }]
+    },
+    {
+      "id": "gemma3-4b",
+      "label": "Gemma 3 4B",
+      "roles": ["chat"],
+      "vision": true,
+      "contextWindow": 131072,
+      "notes": "Comprend les images.",
+      "variants": [{ "quant": "Q4_K_M", "tag": "gemma3:4b", "sizeGb": 3.3 }]
+    },
+    {
+      "id": "gemma3-12b",
+      "label": "Gemma 3 12B",
+      "roles": ["chat"],
+      "vision": true,
+      "contextWindow": 131072,
+      "notes": "Comprend les images, long contexte.",
+      "variants": [
+        { "quant": "Q4_K_M", "tag": "gemma3:12b", "sizeGb": 8.1 },
+        { "quant": "Q8_0", "tag": "gemma3:12b-it-q8_0", "sizeGb": 13 }
+      ]
+    },
+    {
+      "id": "gemma3-27b",
+      "label": "Gemma 3 27B",
+      "roles": ["chat"],
+      "vision": true,
+      "contextWindow": 131072,
+      "notes": "Comprend les images. Cartes 24 Go.",
+      "variants": [{ "quant": "Q4_K_M", "tag": "gemma3:27b", "sizeGb": 17 }]
+    },
+    {
+      "id": "mistral-small3.2",
+      "label": "Mistral Small 3.2 24B",
+      "roles": ["chat"],
+      "vision": true,
+      "contextWindow": 131072,
+      "notes": "Excellent en français, comprend les images.",
+      "variants": [{ "quant": "Q4_K_M", "tag": "mistral-small3.2:24b", "sizeGb": 15 }]
+    },
+    {
+      "id": "llama3.2-1b",
+      "label": "Llama 3.2 1B",
+      "roles": ["complete"],
+      "vision": false,
+      "contextWindow": 131072,
+      "notes": "Autocomplétion rapide de texte.",
+      "variants": [{ "quant": "Q8_0", "tag": "llama3.2:1b", "sizeGb": 1.3 }]
+    },
+    {
+      "id": "qwen2.5-coder-1.5b",
+      "label": "Qwen2.5 Coder 1.5B",
+      "roles": ["complete"],
+      "vision": false,
+      "contextWindow": 32768,
+      "notes": "Autocomplétion, surtout pour le code.",
+      "variants": [{ "quant": "Q4_K_M", "tag": "qwen2.5-coder:1.5b", "sizeGb": 1.0 }]
+    },
+    {
+      "id": "qwen2.5-coder-0.5b",
+      "label": "Qwen2.5 Coder 0.5B",
+      "roles": ["complete"],
+      "vision": false,
+      "contextWindow": 32768,
+      "notes": "Autocomplétion minimale, tourne partout.",
+      "variants": [{ "quant": "Q8_0", "tag": "qwen2.5-coder:0.5b", "sizeGb": 0.5 }]
+    }
+  ]
+}

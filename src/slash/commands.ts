@@ -3,6 +3,8 @@ import {
   addTableColumn,
   addTableRow,
   clearBlockFormat,
+  clearTriggerText,
+  dispatchInput,
   findTableContext,
   insertCodeFence,
   insertTaskCheckbox,
@@ -12,8 +14,10 @@ import {
   type SlashCtx,
 } from "./runners";
 import { enterMathEdit } from "./math";
+import { emitAi, isAiReady } from "../ai/boot";
+import type { SlashAiKind } from "../ai/types";
 
-export type SlashGroup = "format" | "block" | "table" | "math";
+export type SlashGroup = "format" | "block" | "table" | "math" | "ai";
 
 export type SlashCommand = {
   id: string;
@@ -33,6 +37,16 @@ export type SlashCommand = {
 
 function mapped(action: ToolbarAction) {
   return (ctx: SlashCtx) => runMappedCommand(ctx, action);
+}
+
+/** Commande IA : retire le texte `/…` puis délègue au module IA (chargé à
+ * part) via le bus. Invisible tant que l'assistant n'est pas prêt. */
+function ai(kind: SlashAiKind) {
+  return (ctx: SlashCtx) => {
+    clearTriggerText(ctx.editor, ctx.triggerNode, ctx.triggerOffset);
+    dispatchInput(ctx.editor);
+    emitAi("slash", { kind });
+  };
 }
 
 export const SLASH_COMMANDS: SlashCommand[] = [
@@ -194,6 +208,35 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     hint: "$$…$$",
     group: "math",
     run: (ctx) => enterMathEdit(ctx, true),
+  },
+
+  // ---------------- Assistant IA ----------------
+  {
+    id: "ai-ask",
+    names: ["ia", "ai", "assistant"],
+    label: "Demander à l'IA",
+    hint: "ouvre l'assistant",
+    group: "ai",
+    isEnabled: () => isAiReady(),
+    run: ai("ask"),
+  },
+  {
+    id: "ai-continue",
+    names: ["iacontinuer", "iasuite", "aicontinue", "continuer"],
+    label: "IA : continuer ici",
+    hint: "suite du texte au curseur, relue en diff",
+    group: "ai",
+    isEnabled: () => isAiReady(),
+    run: ai("continue"),
+  },
+  {
+    id: "ai-summary",
+    names: ["iaresume", "iarésumé", "airesume", "aisummary", "resume", "résumé"],
+    label: "IA : insérer un résumé",
+    hint: "résumé du document au curseur",
+    group: "ai",
+    isEnabled: () => isAiReady(),
+    run: ai("summary"),
   },
 
   // ---------------- Tableau ----------------

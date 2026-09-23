@@ -1690,6 +1690,35 @@ body.ctrl-held .reading a:hover {
 [data-theme="dark"] .floating-toolbar .sep {
   background: rgba(0, 0, 0, 0.18);
 }
+.floating-toolbar button.ft-ai svg {
+  width: 14px;
+  height: 14px;
+}
+.floating-toolbar button.on {
+  background: rgba(255, 255, 255, 0.15);
+}
+[data-theme="dark"] .floating-toolbar button.on {
+  background: rgba(0, 0, 0, 0.15);
+}
+/* Actions rapides de l'assistant IA, sous la barre flottante. */
+.floating-ai-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+  padding: 4px;
+  background: var(--text);
+  border-radius: 8px;
+  box-shadow: 0 10px 24px -8px rgba(0, 0, 0, 0.35);
+  z-index: 11;
+}
+.floating-toolbar .floating-ai-menu button {
+  justify-content: flex-start;
+  padding: 0 10px;
+  height: 28px;
+}
 @keyframes ftFade {
   from {
     opacity: 0;
@@ -2315,6 +2344,32 @@ body.ctrl-held .reading a:hover {
 .twk-field:focus {
   border-color: rgba(0, 0, 0, 0.25);
   background: rgba(255, 255, 255, 0.85);
+}
+/* Bouton discret (entrée « Assistant IA — configurer »). */
+.twk-btn {
+  appearance: none;
+  box-sizing: border-box;
+  width: 100%;
+  height: 28px;
+  padding: 0 10px;
+  border: 0.5px solid rgba(0, 0, 0, 0.1);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.6);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.twk-btn:hover {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(0, 0, 0, 0.2);
+}
+[data-theme="dark"] .twk-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+[data-theme="dark"] .twk-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
 }
 [data-theme="dark"] .twk-field {
   background: rgba(255, 255, 255, 0.08);

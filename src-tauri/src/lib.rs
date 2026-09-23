@@ -1,4 +1,6 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+mod ai;
+
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::sync::{Arc, Mutex};
@@ -522,6 +524,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            ai::init(app);
+
             #[cfg(windows)]
             {
                 if let Some(window) = app.get_webview_window("main") {
@@ -548,7 +552,24 @@ pub fn run() {
             write_session,
             export_pdf,
             copy_image_asset,
-            read_image_as_data_uri
+            read_image_as_data_uri,
+            ai::ai_status,
+            ai::ai_detect_providers,
+            ai::ai_save_key,
+            ai::ai_delete_key,
+            ai::ai_settings_get,
+            ai::ai_settings_set,
+            ai::ai_conversation_get,
+            ai::ai_conversation_set,
+            ai::ai_list_models,
+            ai::ai_chat,
+            ai::ai_cancel,
+            ai::ai_read_context_path,
+            ai::ai_hardware_scan,
+            ai::ai_catalog,
+            ai::ai_ollama_pull,
+            ai::ai_ollama_residency,
+            ai::ai_benchmark
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

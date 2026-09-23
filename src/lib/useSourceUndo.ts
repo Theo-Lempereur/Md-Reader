@@ -20,6 +20,8 @@ export type SourceUndoApi = {
   undo: () => boolean;
   /** Rétablit la modification annulée. */
   redo: () => boolean;
+  /** Fige immédiatement l'état courant dans l'historique. */
+  commitNow: () => void;
 };
 
 /** Pile d'annulation pour les vues source (DOM structuré en lignes).
@@ -145,7 +147,7 @@ export function useSourceUndo(opts: {
   }, [apply, commitNow]);
 
   return useMemo(
-    () => ({ scheduleCommit, undo, redo }),
-    [scheduleCommit, undo, redo],
+    () => ({ scheduleCommit, undo, redo, commitNow }),
+    [scheduleCommit, undo, redo, commitNow],
   );
 }

@@ -1,5 +1,7 @@
 import {
+  lazy,
   memo,
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -25,10 +27,14 @@ import { normalizeMarkdown } from "./markdown/normalize";
 import { WELCOME_MD } from "./welcome";
 import { highlightSearch, tokenizeLine, marginIcon } from "./markdown/source";
 import {
+  getSourceSelectionText,
   readMarkdownFromSourceRoot,
   readSourceCaret,
   writeSourceCaret,
 } from "./markdown/sourceDom";
+import { htmlToMarkdown } from "./lib/htmlToMarkdown";
+import { emitAi, initialStatus, loadAiBoot, setAiStatusFlag } from "./ai/boot";
+import type { AiBootInfo, AiBridge, AiStatus } from "./ai/types";
 import { useSourceEditing } from "./lib/useSourceEditing";
 import { useSourceUndo } from "./lib/useSourceUndo";
 import { Icon } from "./components/Icons";
@@ -320,9 +326,22 @@ async function savePersistedSession(session: PersistedSession): Promise<void> {
   }
 }
 
+// Module IA : chunk séparé, chargé seulement quand l'assistant est configuré
+// ou que l'utilisateur ouvre sa configuration.
+const AiHost = lazy(() => import("./ai").then((m) => ({ default: m.AiHost })));
+const AiDiffPanel = lazy(() =>
+  import("./ai").then((m) => ({ default: m.AiDiffPanel })),
+);
+
+/** Repère inséré au caret pour en connaître la position dans le markdown
+ * (caractères à usage privé : jamais présents dans un document réel). */
+const CARET_MARKER = "mdr-caret";
+
 type SidePanel =
   | { mode: "block"; block: BlockInfo }
   | { mode: "full"; initialBlock: BlockInfo; nonce: number }
+  /** Relecture d'une modification proposée par l'assistant IA. */
+  | { mode: "diff"; patchId: string; tabId: string }
   | null;
 
 function centerOnEl(container: HTMLElement, el: HTMLElement) {
@@ -686,6 +705,8 @@ function App() {
   const sliderTextWidth = Math.min(tweaks.textWidth, textWidthMax);
 
   const sidePanelMode = sidePanel?.mode ?? null;
+  const inspectMode =
+    sidePanelMode === "block" || sidePanelMode === "full" ? sidePanelMode : null;
   // Map ligne → blockKey pour TOUTES les lignes de chaque bloc, pas seulement le début.
   const fullSourceLineToBlock = useMemo(() => {
     if (sidePanelMode !== "full" || !active) return undefined;
@@ -801,7 +822,7 @@ function App() {
 
   const updateFromSideSource = useCallback(
     (nextSource: string) => {
-      if (!active || !sidePanel || !editMode) return;
+      if (!active || !sidePanel || sidePanel.mode === "diff" || !editMode) return;
       const tabId = active.id;
       const baseContent =
         sideSourceDraftRef.current?.tabId === tabId
@@ -1218,7 +1239,8 @@ function App() {
           .get(activeId)
           ?.refreshFromContent(normalizeMarkdown(tab.content));
     }
-    setSidePanel(null);
+    // La relecture d'une modification IA survit au changement de mode.
+    setSidePanel((prev) => (prev?.mode === "diff" ? prev : null));
     setHighlightedBlock(null);
     setEditMode((v) => !v);
   }, [editMode, sourceVisible, activeId, captureUiState]);
@@ -1758,9 +1780,12 @@ function App() {
     };
   }, [editMode, viewMode, activeId]);
 
-  // Réinitialise le panneau source au changement d'onglet.
+  // Réinitialise le panneau source au changement d'onglet (sauf la relecture
+  // d'une modification IA qui vise justement le nouvel onglet).
   useEffect(() => {
-    setSidePanel(null);
+    setSidePanel((prev) =>
+      prev?.mode === "diff" && prev.tabId === activeId ? prev : null,
+    );
     setSyncLine(null);
     setHighlightedBlock(null);
     blockEls.current.clear();
@@ -1993,6 +2018,339 @@ function App() {
     await performExportPdf(opts);
   };
 
+  /* ---------------------------------------------------------------- */
+  /* Assistant IA (module optionnel, chargé à la demande)              */
+  /* ---------------------------------------------------------------- */
+
+  const [aiBoot, setAiBoot] = useState<AiBootInfo | null>(null);
+  const [aiStatus, setAiStatus] = useState<AiStatus>("off");
+  const [aiDockOpen, setAiDockOpen] = useState(false);
+  const [aiSetupOpen, setAiSetupOpen] = useState(false);
+
+  // Lecture locale uniquement (réglages + présence des clés) : aucun octet
+  // ne part sur le réseau tant qu'aucun fournisseur n'est configuré.
+  useEffect(() => {
+    let cancelled = false;
+    void loadAiBoot().then((boot) => {
+      if (cancelled) return;
+      const status = initialStatus(boot);
+      setAiBoot(boot);
+      setAiStatus(status);
+      setAiStatusFlag(status);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (aiStatus === "off") setAiDockOpen(false);
+  }, [aiStatus]);
+
+  const aiLoaded = !!aiBoot?.compiled && (aiStatus !== "off" || aiSetupOpen);
+
+  /** Dernier caret connu dans l'éditeur actif : le dock prend le focus, il
+   * faut pouvoir revenir insérer au bon endroit. */
+  const lastCaretRef = useRef<{
+    tabId: string;
+    source?: SourceCaret;
+    preview?: { offset: number };
+  } | null>(null);
+  useEffect(() => {
+    if (aiStatus === "off" || !editMode) return;
+    const onSel = () => {
+      const sel = window.getSelection();
+      const node = sel && sel.rangeCount ? sel.getRangeAt(0).startContainer : null;
+      if (!node) return;
+      if (sourceVisible) {
+        const root = sourceRef.current?.getRoot();
+        if (!root?.contains(node)) return;
+        const caret = sourceRef.current?.getCaret();
+        if (caret) lastCaretRef.current = { tabId: activeId, source: caret };
+      } else {
+        const handle = wysiwygHandles.current.get(activeId);
+        if (!handle?.getRoot()?.contains(node)) return;
+        const caret = handle.getCaret();
+        if (caret) lastCaretRef.current = { tabId: activeId, preview: caret };
+      }
+    };
+    document.addEventListener("selectionchange", onSel);
+    return () => document.removeEventListener("selectionchange", onSel);
+  }, [aiStatus, editMode, sourceVisible, activeId]);
+
+  // Valeurs courantes lues par le pont (construit une seule fois).
+  const aiLiveRef = useRef({
+    activeId,
+    editMode,
+    sourceVisible,
+    switchTab,
+    getActiveMarkdown,
+    clearSideSourceDraft,
+  });
+  aiLiveRef.current = {
+    activeId,
+    editMode,
+    sourceVisible,
+    switchTab,
+    getActiveMarkdown,
+    clearSideSourceDraft,
+  };
+
+  const aiBridge = useMemo<AiBridge>(() => {
+    const live = () => aiLiveRef.current;
+
+    const getTabMarkdown = (tabId: string): string | null => {
+      const L = live();
+      const tab = tabsRef.current.find((t) => t.id === tabId);
+      if (!tab) return null;
+      if (sideSourceDraftRef.current?.tabId === tabId) {
+        return normalizeMarkdown(sideSourceDraftRef.current.content);
+      }
+      if (tabId === L.activeId) {
+        // En lecture, l'état fait foi ; en édition, c'est le DOM de l'éditeur.
+        if (!L.editMode) return tab.content;
+        return normalizeMarkdown(L.getActiveMarkdown() ?? tab.content);
+      }
+      if (!tab.dirty) return tab.content;
+      return normalizeMarkdown(
+        wysiwygHandles.current.get(tabId)?.getMarkdown() ?? tab.content,
+      );
+    };
+
+    const focusEditor = (tabId: string) => {
+      const L = live();
+      if (tabId !== L.activeId || !L.editMode) return;
+      const caret =
+        lastCaretRef.current?.tabId === tabId ? lastCaretRef.current : null;
+      if (L.sourceVisible) {
+        sourceRef.current?.focus();
+        if (caret?.source) sourceRef.current?.setCaret(caret.source);
+      } else {
+        const handle = wysiwygHandles.current.get(tabId);
+        handle?.focus();
+        if (caret?.preview) handle?.setCaret(caret.preview);
+      }
+    };
+
+    return {
+      getTabs: () =>
+        tabsRef.current.map((t) => ({ id: t.id, name: t.name, path: t.path })),
+      getActiveTabId: () => live().activeId,
+      isEditMode: () => live().editMode,
+      getTabMarkdown,
+
+      // Le seul chemin d'écriture : instantané d'annulation AVANT de toucher
+      // au document, puis état React + rafraîchissement impératif de
+      // l'éditeur (jamais de réconciliation React sur un DOM édité).
+      applyTabContent: (tabId, content) => {
+        const L = live();
+        const md = normalizeMarkdown(content);
+        const isActive = tabId === L.activeId;
+        L.clearSideSourceDraft(tabId);
+        if (isActive && L.sourceVisible) {
+          sourceRef.current?.pushUndoSnapshot();
+          sourceRef.current?.replaceContent(md);
+        } else {
+          wysiwygHandles.current.get(tabId)?.pushUndoSnapshot();
+        }
+        const nextTabs = tabsRef.current.map((t) =>
+          t.id === tabId ? { ...t, content: md, dirty: true } : t,
+        );
+        tabsRef.current = nextTabs;
+        setTabs(nextTabs);
+        wysiwygHandles.current.get(tabId)?.refreshFromContent(md);
+        // Focus dans l'éditeur : un Ctrl+Z immédiat annule la modification.
+        focusEditor(tabId);
+        return getTabMarkdown(tabId) ?? md;
+      },
+
+      insertAtCaret: (markdown) => {
+        const L = live();
+        const caret = lastCaretRef.current;
+        if (!L.editMode || !caret || caret.tabId !== L.activeId) return false;
+        focusEditor(L.activeId);
+        if (L.sourceVisible) return sourceRef.current?.insertText(markdown) ?? false;
+        const handle = wysiwygHandles.current.get(L.activeId);
+        if (!handle) return false;
+        handle.insertMarkdown(markdown);
+        return true;
+      },
+
+      readEditorSelection: () => {
+        const L = live();
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+        const range = sel.getRangeAt(0);
+        if (L.sourceVisible) {
+          const root = sourceRef.current?.getRoot();
+          if (!root?.contains(range.commonAncestorContainer)) return null;
+          const text = getSourceSelectionText(root);
+          return text ? { tabId: L.activeId, markdown: text, text } : null;
+        }
+        const pane = readingPaneRef.current;
+        if (!pane?.contains(range.commonAncestorContainer)) return null;
+        const text = sel.toString().replace(/​/g, "");
+        if (!text.trim()) return null;
+        let markdown = text;
+        if (L.editMode) {
+          try {
+            const box = document.createElement("div");
+            box.appendChild(range.cloneContents());
+            markdown = htmlToMarkdown(box.innerHTML).trim() || text;
+          } catch {
+            markdown = text;
+          }
+        }
+        return { tabId: L.activeId, markdown, text };
+      },
+
+      getCaretOffset: () => {
+        const L = live();
+        if (!L.editMode) return null;
+        if (L.sourceVisible) {
+          const src = sourceRef.current;
+          const caret =
+            src?.getCaret() ??
+            (lastCaretRef.current?.tabId === L.activeId
+              ? lastCaretRef.current.source
+              : undefined);
+          const markdown = src?.getMarkdown();
+          if (!caret || markdown == null) return null;
+          const lines = markdown.split("\n");
+          let offset = 0;
+          for (let i = 0; i < caret.line && i < lines.length; i++) {
+            offset += lines[i].length + 1;
+          }
+          offset += Math.min(caret.column, lines[caret.line]?.length ?? 0);
+          return { tabId: L.activeId, offset, markdown };
+        }
+        // WYSIWYG : repère inséré au caret le temps d'une conversion en
+        // markdown, puis retiré (aucun événement input, aucun instantané).
+        const handle = wysiwygHandles.current.get(L.activeId);
+        const root = handle?.getRoot();
+        if (!handle || !root) return null;
+        const sel = window.getSelection();
+        let range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+        if (!range || !root.contains(range.startContainer)) {
+          const last = lastCaretRef.current;
+          if (last?.tabId !== L.activeId || !last.preview) return null;
+          handle.setCaret(last.preview);
+          range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+          if (!range || !root.contains(range.startContainer)) return null;
+        }
+        const saved = handle.getCaret();
+        const marker = document.createTextNode(CARET_MARKER);
+        const at = range.cloneRange();
+        at.collapse(true);
+        at.insertNode(marker);
+        let markdown: string;
+        try {
+          markdown = handle.getMarkdown();
+        } finally {
+          const parent = marker.parentNode;
+          marker.remove();
+          parent?.normalize();
+          if (saved) handle.setCaret(saved);
+        }
+        const markerAt = markdown.indexOf(CARET_MARKER);
+        if (markerAt < 0) return null;
+        // Le repère peut préserver un blanc que la conversion aurait supprimé
+        // (espace en fin de paragraphe) : on se recale sur le markdown réel,
+        // celui que verra le diff, par plus long préfixe commun.
+        const clean = normalizeMarkdown(handle.getMarkdown());
+        const before = markdown.slice(0, markerAt);
+        let offset = 0;
+        while (
+          offset < before.length &&
+          offset < clean.length &&
+          before.charCodeAt(offset) === clean.charCodeAt(offset)
+        ) {
+          offset++;
+        }
+        return { tabId: L.activeId, offset, markdown: clean };
+      },
+
+      getEditorRoot: () => {
+        const L = live();
+        if (!L.editMode) return null;
+        if (L.sourceVisible) {
+          const el = sourceRef.current?.getRoot();
+          return el ? { kind: "source", el, tabId: L.activeId } : null;
+        }
+        const el = wysiwygHandles.current.get(L.activeId)?.getRoot();
+        return el ? { kind: "wysiwyg", el, tabId: L.activeId } : null;
+      },
+
+      openDiff: (patchId, tabId) => {
+        const L = live();
+        if (tabId !== L.activeId) L.switchTab(tabId);
+        setSidePanel({ mode: "diff", patchId, tabId });
+      },
+      closeDiff: () =>
+        setSidePanel((prev) => (prev?.mode === "diff" ? null : prev)),
+
+      revealLine: (tabId, line) => {
+        const L = live();
+        if (tabId !== L.activeId) L.switchTab(tabId);
+        // Double rAF : laisse le changement d'onglet se peindre avant de défiler.
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            if (live().sourceVisible) {
+              sourceRef.current?.scrollToLine(line);
+              return;
+            }
+            let best: { key: number; el: HTMLDivElement } | null = null;
+            blockEls.current.forEach((info, key) => {
+              if (info.lineStart <= line) best = { key, el: info.el };
+            });
+            const target = best as { key: number; el: HTMLDivElement } | null;
+            if (target && readingPaneRef.current) {
+              centerOnEl(readingPaneRef.current, target.el);
+              setHighlightedBlock(target.key);
+            }
+          });
+        });
+      },
+
+      setStatus: (status) => {
+        setAiStatus(status);
+        setAiStatusFlag(status);
+      },
+      openSetup: () => setAiSetupOpen(true),
+      openDock: () => setAiDockOpen(true),
+    };
+  }, []);
+
+  const aiTabs = useMemo(
+    () => tabs.map((t) => ({ id: t.id, name: t.name, path: t.path })),
+    // Signature stable : noms, chemins et identifiants seulement.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tabs.map((t) => `${t.id}\u0000${t.name}\u0000${t.path ?? ""}`).join("\u0001")],
+  );
+
+  // Raccourci Ctrl+J : ouvre / ferme le dock de l'assistant.
+  useEffect(() => {
+    if (aiStatus === "off") return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "j") {
+        e.preventDefault();
+        setAiDockOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [aiStatus]);
+
+  const renderAiDiff = () =>
+    sidePanel?.mode === "diff" ? (
+      <Suspense fallback={null}>
+        <AiDiffPanel
+          patchId={sidePanel.patchId}
+          onClose={() => setSidePanel(null)}
+        />
+      </Suspense>
+    ) : null;
+
   return (
     <div
       className="app"
@@ -2069,6 +2427,15 @@ function App() {
           >
             {tweaks.theme === "dark" ? <Icon.Sun /> : <Icon.Moon />}
           </button>
+          {aiStatus !== "off" && (
+            <button
+              className={`icon-btn ${aiDockOpen ? "active" : ""}`}
+              title="Assistant IA (Ctrl+J)"
+              onClick={() => setAiDockOpen((v) => !v)}
+            >
+              <Icon.Sparkles />
+            </button>
+          )}
           {updater.status === "available" && (
             <button
               className="icon-btn update-btn"
@@ -2238,7 +2605,13 @@ function App() {
               }}
             />
           </div>
-        ) : (
+        ) : null}
+        {active && sourceVisible && sidePanel?.mode === "diff" && (
+          <div className="side-source open">
+            <div className="side-source-inner">{renderAiDiff()}</div>
+          </div>
+        )}
+        {!active || sourceVisible ? null : (
           <>
             {/* Volet lecture + éditeur WYSIWYG */}
             <div className="reading-pane" ref={readingPaneRef}>
@@ -2284,7 +2657,7 @@ function App() {
                             }),
                           selectedBlockKey:
                             sidePanel?.mode === "block" ? sidePanel.block.key : null,
-                          inspectMode: sidePanel?.mode ?? null,
+                          inspectMode,
                           highlightedBlockKey: highlightedBlock,
                           blockEls,
                         })}
@@ -2312,7 +2685,7 @@ function App() {
                       }),
                     selectedBlockKey:
                       sidePanel?.mode === "block" ? sidePanel.block.key : null,
-                    inspectMode: sidePanel?.mode ?? null,
+                    inspectMode,
                     highlightedBlockKey: highlightedBlock,
                     onTaskToggle: (lineIndex, checked) =>
                       toggleTaskAtLine(active.id, lineIndex, checked),
@@ -2322,13 +2695,24 @@ function App() {
               )}
 
               {editMode && viewMode === "preview" && (
-                <FloatingToolbar pos={floatPos} onAction={handleAction} />
+                <FloatingToolbar
+                  pos={floatPos}
+                  onAction={handleAction}
+                  onAiAction={
+                    aiStatus === "ready"
+                      ? (kind) => emitAi("quick-action", { kind })
+                      : undefined
+                  }
+                />
               )}
             </div>
 
             {/* Panneau source latéral */}
             <div className={`side-source ${sidePanel ? "open" : ""}`}>
-              {sidePanel && (
+              {sidePanel?.mode === "diff" && (
+                <div className="side-source-inner">{renderAiDiff()}</div>
+              )}
+              {sidePanel && sidePanel.mode !== "diff" && (
                 <div className="side-source-inner">
                   <div className="side-head">
                     <span className="side-title">
@@ -2404,6 +2788,22 @@ function App() {
               )}
             </div>
           </>
+        )}
+
+        {/* Dock de l'assistant IA : à l'extérieur du panneau source latéral. */}
+        {aiLoaded && aiBoot && (
+          <Suspense fallback={null}>
+            <AiHost
+              bridge={aiBridge}
+              boot={aiBoot}
+              activeTabId={active?.id ?? ""}
+              tabs={aiTabs}
+              dockOpen={aiDockOpen}
+              onCloseDock={() => setAiDockOpen(false)}
+              setupOpen={aiSetupOpen}
+              onCloseSetup={() => setAiSetupOpen(false)}
+            />
+          </Suspense>
         )}
       </div>
 
@@ -2517,6 +2917,24 @@ function App() {
           value={tweaks.autoSave}
           onChange={(v) => setTweak("autoSave", v)}
         />
+
+        {aiBoot?.compiled && (
+          <>
+            <TweakSection label="Assistant IA" />
+            <button
+              type="button"
+              className="twk-btn"
+              onClick={() => {
+                setTweaksOpen(false);
+                setAiSetupOpen(true);
+              }}
+            >
+              {aiStatus === "off"
+                ? "Assistant IA — configurer"
+                : "Réglages de l'assistant"}
+            </button>
+          </>
+        )}
       </TweaksPanel>
 
       {pdfModalOpen && (

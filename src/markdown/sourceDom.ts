@@ -11,8 +11,17 @@ export function readMarkdownFromSourceRoot(
   if (!root) return normalizeMarkdown(fallback);
   const lines = Array.from(
     root.querySelectorAll<HTMLElement>(".src-content"),
-  ).map((el) => (el.textContent || "").replace(/\u200b/g, ""));
+  ).map((el) => srcContentTextWithoutGhost(el).replace(/\u200b/g, ""));
   return normalizeMarkdown(lines.join("\n"));
+}
+
+/** Texte d'une ligne source, sans le texte fant\u00f4me de l'autocompl\u00e9tion IA
+ * (`[data-ai-ghost]`), qui ne doit jamais atteindre le markdown. */
+function srcContentTextWithoutGhost(el: HTMLElement): string {
+  if (!el.querySelector("[data-ai-ghost]")) return el.textContent || "";
+  const clone = el.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll("[data-ai-ghost]").forEach((g) => g.remove());
+  return clone.textContent || "";
 }
 
 export function findSrcContent(node: Node | null): HTMLElement | null {
