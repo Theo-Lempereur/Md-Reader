@@ -20,6 +20,7 @@ export function contextWindow(settings: AiSettings, provider: ProviderId, model:
     case "anthropic":
       return m.includes("haiku") ? 200_000 : 1_000_000;
     case "codex":
+    case "claude":
       return 200_000;
     case "openai":
       if (m.startsWith("gpt-4.1")) return 1_000_000;

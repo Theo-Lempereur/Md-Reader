@@ -1,5 +1,5 @@
-//! État global du module : requêtes en cours (annulables), gestionnaire
-//! Codex, fichiers de réglages, détection des fournisseurs.
+//! État global du module : requêtes en cours (annulables), gestionnaires
+//! Codex et Claude, fichiers de réglages, détection des fournisseurs.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager};
 
+use super::claude_code::ClaudeManager;
 use super::codex::CodexManager;
 use super::provider::{self, CancelToken, Sink, KEYED_PROVIDERS};
 use super::{keys, ChatMessage, ChatMode, ChatRequest, PullEvent, StreamEvent};
@@ -22,6 +23,7 @@ pub const CONVERSATION_FILE: &str = "ai-conversation.json";
 pub struct AiState {
     requests: Mutex<HashMap<String, CancelToken>>,
     pub codex: Arc<CodexManager>,
+    pub claude: Arc<ClaudeManager>,
 }
 
 pub fn get(app: &AppHandle) -> tauri::State<'_, AiState> {
@@ -156,14 +158,18 @@ async fn probe_lmstudio(app: &AppHandle) -> Value {
 }
 
 pub async fn detect(app: &AppHandle) -> Result<Value, String> {
-    let (codex, ollama, lmstudio) =
-        tokio::join!(super::codex::detect(), probe_ollama(app), probe_lmstudio(app));
+    let (codex, claude, ollama, lmstudio) = tokio::join!(
+        super::codex::detect(),
+        super::claude_code::detect(),
+        probe_ollama(app),
+        probe_lmstudio(app)
+    );
     let keys: Vec<&str> = KEYED_PROVIDERS
         .iter()
         .copied()
         .filter(|p| keys::has(p))
         .collect();
-    Ok(json!({ "codex": codex, "ollama": ollama, "lmstudio": lmstudio, "keys": keys }))
+    Ok(json!({ "codex": codex, "claude": claude, "ollama": ollama, "lmstudio": lmstudio, "keys": keys }))
 }
 
 /* ------------------------------------------------------------------ */

@@ -16,8 +16,9 @@ import type {
   UiMessage,
 } from "./types";
 
-export const PROVIDERS: { id: ProviderId; label: string; kind: "codex" | "key" | "local" }[] = [
-  { id: "codex", label: "Codex (ChatGPT)", kind: "codex" },
+export const PROVIDERS: { id: ProviderId; label: string; kind: "cli" | "key" | "local" }[] = [
+  { id: "codex", label: "Codex (ChatGPT)", kind: "cli" },
+  { id: "claude", label: "Claude (abonnement)", kind: "cli" },
   { id: "openai", label: "OpenAI", kind: "key" },
   { id: "anthropic", label: "Anthropic", kind: "key" },
   { id: "mistral", label: "Mistral", kind: "key" },
@@ -32,8 +33,14 @@ export const providerLabel = (id: ProviderId | null | undefined) =>
 export const isLocalProvider = (id: ProviderId | null | undefined) =>
   id === "ollama" || id === "lmstudio";
 
+/** Fournisseurs par abonnement, via une CLI installée (Codex, Claude Code) :
+ * pas d'autocomplétion, et le mode édition travaille sur un fichier. */
+export const isCliProvider = (id: ProviderId | null | undefined) =>
+  id === "codex" || id === "claude";
+
 export const DEFAULT_MODELS: Partial<Record<ProviderId, string>> = {
   codex: "default",
+  claude: "default",
   anthropic: "claude-opus-5",
   openai: "gpt-5",
   mistral: "mistral-medium-latest",

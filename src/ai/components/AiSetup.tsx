@@ -1,11 +1,12 @@
-import { useEffect, useId, useState } from "react";
-import { aiApi } from "../client";
+import { useEffect, useId, useRef, useState } from "react";
+import { aiApi, completeText } from "../client";
 import { refreshDetection, recomputeStatus, providerAvailable } from "../status";
 import {
   activeModel,
   AUTO_TTFT_MS,
   benchKey,
   DEFAULT_MODELS,
+  isCliProvider,
   isLocalProvider,
   notify,
   PROVIDERS,
@@ -17,7 +18,7 @@ import type { ProviderId } from "../types";
 import { preloadLocal } from "../residency";
 import { LocalWizard } from "./LocalWizard";
 
-type Door = "codex" | "key" | "local" | "settings";
+type Door = "codex" | "claude" | "key" | "local" | "settings";
 
 const openExternal = (url: string) =>
   import("@tauri-apps/plugin-opener").then(({ openUrl }) => openUrl(url)).catch(() => {});
@@ -212,6 +213,193 @@ function CodexDoor() {
   );
 }
 
+const IS_WINDOWS = typeof navigator !== "undefined" && /windows/i.test(navigator.userAgent);
+const IS_MAC = typeof navigator !== "undefined" && /mac os/i.test(navigator.userAgent);
+const CLAUDE_INSTALL = IS_WINDOWS
+  ? "irm https://claude.ai/install.ps1 | iex"
+  : "curl -fsSL https://claude.ai/install.sh | bash";
+const CLAUDE_INSTALL_ALT = IS_WINDOWS
+  ? "winget install Anthropic.ClaudeCode"
+  : IS_MAC
+    ? "brew install --cask claude-code"
+    : "npm install -g @anthropic-ai/claude-code";
+const CLAUDE_DOCS = "https://code.claude.com/docs/en/setup";
+
+function CopyCommand({ cmd }: { cmd: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="ai-cmd">
+      <code>{cmd}</code>
+      <button
+        type="button"
+        className="pdf-btn"
+        onClick={() => {
+          void navigator.clipboard?.writeText(cmd).then(() => {
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1500);
+          });
+        }}
+      >
+        {copied ? "Copié" : "Copier"}
+      </button>
+    </div>
+  );
+}
+
+const subscriptionLabel = (s?: string | null) =>
+  s ? `abonnement ${s.charAt(0).toUpperCase()}${s.slice(1)}` : "connecté";
+
+type TestState = { state: "idle" | "running" | "ok" | "error"; message?: string };
+
+/** Petite requête réelle au fournisseur, pour vérifier qu'il répond. Le
+ * résultat est oublié quand le fournisseur ou le modèle change. */
+function useConnectionTest(provider: ProviderId | null, model: string) {
+  const [test, setTest] = useState<TestState>({ state: "idle" });
+  const seq = useRef(0);
+  useEffect(() => {
+    seq.current++;
+    setTest({ state: "idle" });
+  }, [provider, model]);
+  const run = async () => {
+    if (!provider) return;
+    const id = ++seq.current;
+    setTest({ state: "running" });
+    try {
+      const text = await completeText({
+        provider,
+        model,
+        messages: [{ role: "user", content: "Réponds uniquement par le mot : OK" }],
+        mode: "chat",
+      });
+      if (id === seq.current) setTest({ state: "ok", message: text.trim().slice(0, 80) || "(réponse vide)" });
+    } catch (e) {
+      if (id === seq.current) setTest({ state: "error", message: e instanceof Error ? e.message : String(e) });
+    }
+  };
+  // Session Claude Code expirée : on propose de se reconnecter.
+  const authError =
+    provider === "claude" && test.state === "error" && /connecté|expiré/.test(test.message ?? "");
+  return { test, run, authError };
+}
+
+function TestResult({ test, name }: { test: TestState; name: string }) {
+  if (test.state === "running") return <p className="ai-muted">Test en cours…</p>;
+  if (test.state === "ok") return <p className="ai-ok">✓ {name} répond : « {test.message} »</p>;
+  if (test.state === "error") return <p className="ai-warn">{test.message}</p>;
+  return null;
+}
+
+const claudeTerminal = (action: "install" | "login") =>
+  void aiApi.claudeTerminal(action).catch((e) => notify(String(e), "error"));
+
+function ClaudeDoor() {
+  const det = useAi((s) => s.detection);
+  const detecting = useAi((s) => s.detecting);
+  const settings = useAi((s) => s.settings);
+  const [model, setModel] = useState(settings.models.claude ?? "default");
+  const { test, run: runTest, authError } = useConnectionTest("claude", model);
+  const claude = det?.claude;
+  const terminal = claudeTerminal;
+
+  return (
+    <div className="ai-door">
+      <p>
+        Utilise votre abonnement Claude (Pro, Max…) via Claude Code, installé et connecté sur cette
+        machine, sans clé API. Le document est transmis à Anthropic uniquement quand vous envoyez
+        une demande, et les échanges comptent dans les limites d'utilisation de votre abonnement.
+      </p>
+      {!det || detecting ? (
+        <p className="ai-muted">Recherche de Claude Code…</p>
+      ) : !claude?.installed ? (
+        <>
+          <p className="ai-warn">Claude Code n'est pas installé sur cette machine.</p>
+          <ol className="ai-steps">
+            <li>
+              Installez Claude Code avec l'installateur officiel d'Anthropic (sans droits
+              administrateur) :
+              <CopyCommand cmd={CLAUDE_INSTALL} />
+              <span className="ai-muted">
+                Autre possibilité : <code>{CLAUDE_INSTALL_ALT}</code>
+              </span>
+            </li>
+            <li>
+              Connectez-vous avec votre compte Claude. Il faut un abonnement Pro ou Max : l'offre
+              gratuite n'inclut pas Claude Code.
+            </li>
+            <li>Revenez ici et cliquez sur « Vérifier à nouveau ».</li>
+          </ol>
+          <div className="ai-actions">
+            <button type="button" className="pdf-btn" onClick={() => void openExternal(CLAUDE_DOCS)}>
+              Documentation
+            </button>
+            <button type="button" className="pdf-btn" onClick={() => terminal("install")}>
+              Installer dans un terminal
+            </button>
+            <button type="button" className="pdf-btn primary" onClick={() => void refreshDetection()}>
+              Vérifier à nouveau
+            </button>
+          </div>
+        </>
+      ) : !claude.loggedIn ? (
+        <>
+          <p className="ai-warn">Claude Code {claude.version ?? ""} est installé mais pas connecté.</p>
+          <p className="ai-muted">
+            « Se connecter » ouvre un terminal, puis votre navigateur sur la page de connexion
+            d'Anthropic. Vous pouvez aussi lancer <code>claude</code> dans un terminal et taper{" "}
+            <code>/login</code>. Il faut un abonnement Pro ou Max.
+          </p>
+          <div className="ai-actions">
+            <button type="button" className="pdf-btn" onClick={() => terminal("login")}>
+              Se connecter
+            </button>
+            <button type="button" className="pdf-btn primary" onClick={() => void refreshDetection()}>
+              Vérifier à nouveau
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="ai-ok">
+            ✓ Claude Code {claude.version} · {subscriptionLabel(claude.subscription)}
+          </p>
+          {claude.authMethod && claude.authMethod !== "claude.ai" && (
+            <p className="ai-warn">
+              Claude Code est connecté avec un compte « {claude.authMethod} » : l'utilisation sera
+              facturée sur ce compte, pas sur un abonnement Claude.
+            </p>
+          )}
+          <label className="ai-label">Modèle</label>
+          <ModelPicker provider="claude" value={model} onChange={setModel} />
+          <p className="ai-muted ai-note">
+            « default » suit le modèle par défaut de votre abonnement ; sonnet, opus et haiku
+            désignent le dernier modèle de chaque gamme. Le mode « Modifier le document » fait
+            travailler Claude sur une copie temporaire. Pas d'autocomplétion avec l'abonnement.
+          </p>
+          <TestResult test={test} name="Claude" />
+          <div className="ai-actions">
+            {authError && (
+              <button type="button" className="pdf-btn" onClick={() => terminal("login")}>
+                Se reconnecter
+              </button>
+            )}
+            <button
+              type="button"
+              className="pdf-btn"
+              disabled={test.state === "running"}
+              onClick={() => void runTest()}
+            >
+              Tester la connexion
+            </button>
+            <button type="button" className="pdf-btn primary" onClick={chooseProvider("claude", model)}>
+              Utiliser Claude
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 const KEY_PROVIDERS: ProviderId[] = ["openai", "anthropic", "mistral", "openrouter"];
 const KEY_HELP: Partial<Record<ProviderId, string>> = {
   openai: "https://platform.openai.com/api-keys",
@@ -392,12 +580,31 @@ function SettingsDoor({ onClose }: { onClose: () => void }) {
   const status = useAi((s) => s.status);
   const p = settings.activeProvider;
   const [benching, setBenching] = useState(false);
+  const model = activeModel(settings);
+  const { test, run: runTest, authError } = useConnectionTest(p, model);
+
+  // Fournisseurs prêts à l'emploi ; l'actif reste listé même s'il ne répond plus.
+  const connected = PROVIDERS.filter((x) => x.id === p || providerAvailable(det, keys, x.id));
+  const switchProvider = (next: ProviderId) => {
+    updateSettings((s) => ({
+      ...s,
+      activeProvider: next,
+      models: { ...s.models, [next]: s.models[next] ?? DEFAULT_MODELS[next] ?? "" },
+    }));
+    recomputeStatus();
+  };
+  const modelSuggestions =
+    p === "ollama"
+      ? det?.ollama.models.map((m) => m.name)
+      : p === "lmstudio"
+        ? det?.lmstudio.models.map((m) => m.name)
+        : undefined;
 
   const acCandidates = PROVIDERS.filter(
-    (x) => x.id !== "codex" && providerAvailable(det, keys, x.id),
+    (x) => !isCliProvider(x.id) && providerAvailable(det, keys, x.id),
   ).map((x) => x.id);
   const ac = settings.autocomplete;
-  const acProvider = ac.provider ?? (p && p !== "codex" ? p : acCandidates[0] ?? null);
+  const acProvider = ac.provider ?? (p && !isCliProvider(p) ? p : acCandidates[0] ?? null);
   const acModel = ac.model || (acProvider ? activeModel(settings, acProvider) : "");
   const bench = acProvider ? settings.benchmarks[benchKey(acProvider, acModel)] : undefined;
   const twoLocalModels =
@@ -424,10 +631,54 @@ function SettingsDoor({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="ai-door">
-      <p>
-        Fournisseur actif : <strong>{providerLabel(p)}</strong>
-        {p ? ` · ${activeModel(settings) || "modèle par défaut"}` : ""} —{" "}
-        {status === "ready" ? <span className="ai-ok">opérationnel</span> : <span className="ai-warn-inline">ne répond pas</span>}
+      <h4>Fournisseur</h4>
+      <div className="ai-field-row">
+        <select
+          className="ai-input"
+          value={p ?? ""}
+          onChange={(e) => switchProvider(e.target.value as ProviderId)}
+        >
+          {connected.map((x) => (
+            <option key={x.id} value={x.id}>
+              {x.label}
+              {x.id === p && status !== "ready" ? " (ne répond pas)" : ""}
+            </option>
+          ))}
+        </select>
+      </div>
+      {p && (
+        <>
+          <label className="ai-label">Modèle</label>
+          <ModelPicker
+            provider={p}
+            value={model}
+            suggestions={modelSuggestions}
+            onChange={(v) => updateSettings((s) => ({ ...s, models: { ...s.models, [p]: v } }))}
+          />
+        </>
+      )}
+      <TestResult test={test} name={providerLabel(p)} />
+      <div className="ai-actions ai-actions-left">
+        <button
+          type="button"
+          className="pdf-btn"
+          disabled={!p || test.state === "running"}
+          onClick={() => void runTest()}
+        >
+          Tester la connexion
+        </button>
+        {authError && (
+          <button type="button" className="pdf-btn" onClick={() => claudeTerminal("login")}>
+            Se reconnecter
+          </button>
+        )}
+        {status !== "ready" && (
+          <span className="ai-warn-inline">Ce fournisseur ne répond pas : voir son onglet.</span>
+        )}
+      </div>
+      <p className="ai-muted">
+        Seuls les fournisseurs déjà connectés sont proposés. Pour en ajouter un ou régler ses
+        détails, utilisez les onglets ci-dessus.
       </p>
 
       <h4>Autocomplétion</h4>
@@ -447,7 +698,7 @@ function SettingsDoor({ onClose }: { onClose: () => void }) {
         Proposer la suite du texte en gris (Tab pour accepter, Ctrl+Espace à la demande)
       </label>
       {!acProvider && (
-        <p className="ai-muted">Nécessite un modèle local ou une clé API (pas Codex).</p>
+        <p className="ai-muted">Nécessite un modèle local ou une clé API (pas Codex ni l'abonnement Claude).</p>
       )}
       {acProvider && (
         <>
@@ -604,6 +855,7 @@ export function AiSetup({ onClose }: { onClose: () => void }) {
 
   const doors: { id: Door; label: string; hidden?: boolean }[] = [
     { id: "codex", label: "Codex (abonnement ChatGPT)" },
+    { id: "claude", label: "Claude (abonnement)" },
     { id: "key", label: "Clé API" },
     {
       id: "local",
@@ -643,6 +895,7 @@ export function AiSetup({ onClose }: { onClose: () => void }) {
         </div>
         <div className="pdf-modal-body">
           {door === "codex" && <CodexDoor />}
+          {door === "claude" && <ClaudeDoor />}
           {door === "key" && <KeyDoor />}
           {door === "local" && <LocalDoor />}
           {door === "settings" && <SettingsDoor onClose={onClose} />}

@@ -3,6 +3,7 @@
 
 export type ProviderId =
   | "codex"
+  | "claude"
   | "openai"
   | "anthropic"
   | "mistral"
@@ -54,6 +55,16 @@ export type Detection = {
     version?: string | null;
     loggedIn?: boolean;
     loginDetail?: string | null;
+  };
+  claude: {
+    installed: boolean;
+    version?: string | null;
+    loggedIn?: boolean;
+    /** `claude.ai` (abonnement) ou `console` (compte API). */
+    authMethod?: string | null;
+    /** `pro`, `max`… */
+    subscription?: string | null;
+    path?: string;
   };
   ollama: { installed: boolean; running: boolean; models: { name: string; size?: number }[] };
   lmstudio: { running: boolean; models: { name: string }[] };

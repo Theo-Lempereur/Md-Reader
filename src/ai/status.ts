@@ -8,6 +8,8 @@ export function providerAvailable(det: Detection | null, keys: string[], p: Prov
   switch (p) {
     case "codex":
       return !!det?.codex.installed && !!det.codex.loggedIn;
+    case "claude":
+      return !!det?.claude?.installed && !!det.claude.loggedIn;
     case "ollama":
       return !!det?.ollama.running;
     case "lmstudio":

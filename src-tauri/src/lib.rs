@@ -569,7 +569,8 @@ pub fn run() {
             ai::ai_catalog,
             ai::ai_ollama_pull,
             ai::ai_ollama_residency,
-            ai::ai_benchmark
+            ai::ai_benchmark,
+            ai::ai_claude_terminal
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

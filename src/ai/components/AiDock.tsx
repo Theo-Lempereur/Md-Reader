@@ -6,6 +6,7 @@ import { contextWindow } from "../context/tokens";
 import {
   activeModel,
   clearConversation,
+  isCliProvider,
   newId,
   providerLabel,
   updateSettings,
@@ -407,9 +408,10 @@ export function AiDock({
             </button>
           )}
         </div>
-        {mode === "edit" && provider === "codex" && (
+        {mode === "edit" && isCliProvider(provider) && (
           <div className="ai-muted ai-note">
-            Codex travaille sur une copie temporaire du document : comptez une à deux minutes.
+            {provider === "codex" ? "Codex" : "Claude"} travaille sur une copie temporaire du
+            document : comptez {provider === "codex" ? "une à deux minutes" : "de quelques secondes à une minute"}.
           </div>
         )}
       </div>

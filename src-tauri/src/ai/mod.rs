@@ -21,6 +21,8 @@ mod anthropic;
 #[cfg(feature = "ai")]
 mod catalog;
 #[cfg(feature = "ai")]
+mod claude_code;
+#[cfg(feature = "ai")]
 mod codex;
 #[cfg(feature = "ai")]
 mod context;
@@ -89,12 +91,12 @@ pub struct ChatRequest {
     #[serde(default)]
     pub system: Option<String>,
     pub messages: Vec<ChatMessage>,
-    /// Identifiant de conversation côté front (une session Codex par conversation).
+    /// Identifiant de conversation côté front (une session Codex / Claude par conversation).
     #[serde(default)]
     pub conversation_id: Option<String>,
     #[serde(default)]
     pub mode: ChatMode,
-    /// Document à modifier (mode `edit`, utilisé par Codex qui travaille sur fichier).
+    /// Document à modifier (mode `edit`, pour Codex et Claude qui travaillent sur fichier).
     #[serde(default)]
     pub document: Option<EditDocument>,
     #[serde(default)]
@@ -120,7 +122,7 @@ pub enum StreamEvent {
     Delta { text: String },
     Reasoning { text: String },
     ToolStart { label: String },
-    /// Contenu final du document (Codex en mode édition).
+    /// Contenu final du document (Codex / Claude en mode édition).
     EditResult { content: String },
     Done { usage: Option<Usage>, cancelled: bool },
     Error { message: String },
@@ -169,7 +171,7 @@ pub async fn ai_status(app: AppHandle) -> Result<serde_json::Value, String> {
     }
 }
 
-/// Détection parallèle des fournisseurs disponibles (Codex, Ollama,
+/// Détection parallèle des fournisseurs disponibles (Codex, Claude, Ollama,
 /// LM Studio, clés enregistrées). Uniquement sur demande de l'utilisateur
 /// ou quand un fournisseur est déjà configuré.
 #[tauri::command]
@@ -354,6 +356,21 @@ pub async fn ai_catalog() -> Result<serde_json::Value, String> {
     }
     #[cfg(not(feature = "ai"))]
     {
+        Err(UNSUPPORTED.into())
+    }
+}
+
+/// Ouvre un terminal pour installer Claude Code (`install`) ou connecter la
+/// CLI au compte de l'utilisateur (`login`). Commandes fixes côté Rust.
+#[tauri::command]
+pub async fn ai_claude_terminal(action: String) -> Result<(), String> {
+    #[cfg(feature = "ai")]
+    {
+        claude_code::open_terminal(&action)
+    }
+    #[cfg(not(feature = "ai"))]
+    {
+        let _ = action;
         Err(UNSUPPORTED.into())
     }
 }

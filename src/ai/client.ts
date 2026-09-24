@@ -117,6 +117,8 @@ export const aiApi = {
   benchmark: (provider: ProviderId, model: string) =>
     invoke<Omit<Benchmark, "at">>("ai_benchmark", { provider, model }),
   cancel: (requestId: string) => invoke<void>("ai_cancel", { requestId }),
+  /** Terminal d'installation (`install`) ou de connexion (`login`) de Claude Code. */
+  claudeTerminal: (action: "install" | "login") => invoke<void>("ai_claude_terminal", { action }),
   ollamaResidency: (model: string, load: boolean) =>
     invoke<void>("ai_ollama_residency", { model, load }),
   pull: (model: string, onEvent: (ev: PullEvent) => void) => {

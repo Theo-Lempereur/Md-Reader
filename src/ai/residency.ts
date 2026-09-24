@@ -8,7 +8,7 @@
  * LM Studio n'est pas concerné : l'utilisateur y charge ses modèles lui-même. */
 
 import { aiApi } from "./client";
-import { activeModel, getAi, subscribeAi } from "./useAi";
+import { activeModel, getAi, isCliProvider, subscribeAi } from "./useAi";
 import type { AiSettings, ProviderId } from "./types";
 
 export type LocalUse = { provider: ProviderId; model: string };
@@ -21,8 +21,8 @@ export function modelsInUse(settings: AiSettings): { chat: LocalUse | null; comp
   const ac = settings.autocomplete;
   let complete: LocalUse | null = null;
   if (ac.enabled) {
-    const provider = ac.provider ?? (active && active !== "codex" ? active : null);
-    if (provider && provider !== "codex") {
+    const provider = ac.provider ?? (active && !isCliProvider(active) ? active : null);
+    if (provider && !isCliProvider(provider)) {
       complete = { provider, model: ac.model || activeModel(settings, provider) };
     }
   }

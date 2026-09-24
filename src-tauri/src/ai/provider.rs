@@ -119,6 +119,12 @@ pub fn resolve(app: &AppHandle, provider: &str) -> Result<Box<dyn Provider>, Str
             state.codex.clone(),
         )));
     }
+    if provider == "claude" {
+        let state = super::state::get(app);
+        return Ok(Box::new(super::claude_code::ClaudeCodeProvider::new(
+            state.claude.clone(),
+        )));
+    }
     let base_url = base_url_for(app, provider)?;
     let key = super::keys::get(provider)?;
     if KEYED_PROVIDERS.contains(&provider) && key.is_none() {

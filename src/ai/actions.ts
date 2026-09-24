@@ -19,6 +19,7 @@ import {
   activeModel,
   getAi,
   getConversation,
+  isCliProvider,
   isLocalProvider,
   newId,
   notify,
@@ -206,12 +207,13 @@ export async function sendMessage(opts: {
   );
   const conversationChars =
     text.length + (mode === "chat" ? history.reduce((n, m) => n + m.content.length, 0) : 0);
-  const codexEdit = provider === "codex" && mode === "edit";
+  // Codex et Claude modifient une copie du document sur disque.
+  const fileEdit = isCliProvider(provider) && mode === "edit";
   const ctx = buildContext(items, b, {
-    base: mode === "edit" && !codexEdit ? EDIT_SYSTEM : CHAT_SYSTEM,
+    base: mode === "edit" && !fileEdit ? EDIT_SYSTEM : CHAT_SYSTEM,
     conversationChars,
     windowTokens: contextWindow(getAi().settings, provider, model),
-    excludeActiveDocument: codexEdit,
+    excludeActiveDocument: fileEdit,
   });
 
   if (mode === "edit") {
@@ -270,7 +272,7 @@ export async function sendMessage(opts: {
     conversationId: conv.id,
     mode,
     document:
-      codexEdit && ctx.documentContent != null
+      fileEdit && ctx.documentContent != null
         ? { name: ctx.documentName ?? "document.md", content: ctx.documentContent }
         : undefined,
   });
