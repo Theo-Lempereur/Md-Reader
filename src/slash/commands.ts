@@ -15,9 +15,10 @@ import {
 } from "./runners";
 import { enterMathEdit } from "./math";
 import { emitAi, isAiReady } from "../ai/boot";
+import { openShortcuts } from "../lib/shortcuts";
 import type { SlashAiKind } from "../ai/types";
 
-export type SlashGroup = "format" | "block" | "table" | "math" | "ai";
+export type SlashGroup = "format" | "block" | "table" | "math" | "ai" | "help";
 
 export type SlashCommand = {
   id: string;
@@ -282,6 +283,20 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     run: (ctx) => {
       const table = findTableContext(ctx.editor);
       if (table) addTableRow(ctx, table, true);
+    },
+  },
+
+  // ---------------- Aide ----------------
+  {
+    id: "shortcuts",
+    names: ["raccourcis", "shortcuts", "raccourci", "clavier", "aide", "help"],
+    label: "Raccourcis clavier",
+    hint: "liste de tous les raccourcis",
+    group: "help",
+    run: (ctx) => {
+      clearTriggerText(ctx.editor, ctx.triggerNode, ctx.triggerOffset);
+      dispatchInput(ctx.editor);
+      openShortcuts();
     },
   },
 ];

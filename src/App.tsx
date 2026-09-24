@@ -59,6 +59,8 @@ import {
 import { FileMenu } from "./components/FileMenu";
 import { PdfExportModal } from "./components/PdfExportModal";
 import { ConfirmModal } from "./components/ConfirmModal";
+import { ShortcutsModal } from "./components/ShortcutsModal";
+import { OPEN_SHORTCUTS_EVENT } from "./lib/shortcuts";
 import { WindowControls } from "./components/WindowControls";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -673,6 +675,7 @@ function App() {
     null,
   );
   const [tweaksOpen, setTweaksOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [sidePanel, setSidePanel] = useState<SidePanel>(null);
   const [syncLine, setSyncLine] = useState<number | null>(null);
   // Bloc surligné des deux côtés (preview + source) pour ne pas le perdre de vue
@@ -2328,6 +2331,13 @@ function App() {
     [tabs.map((t) => `${t.id}\u0000${t.name}\u0000${t.path ?? ""}`).join("\u0001")],
   );
 
+  // Commande `/raccourcis` : ouvre la modale des raccourcis.
+  useEffect(() => {
+    const onOpen = () => setShortcutsOpen(true);
+    window.addEventListener(OPEN_SHORTCUTS_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_SHORTCUTS_EVENT, onOpen);
+  }, []);
+
   // Raccourci Ctrl+J : ouvre / ferme le dock de l'assistant.
   useEffect(() => {
     if (aiStatus === "off") return;
@@ -2918,6 +2928,18 @@ function App() {
           onChange={(v) => setTweak("autoSave", v)}
         />
 
+        <TweakSection label="Aide" />
+        <button
+          type="button"
+          className="twk-btn"
+          onClick={() => {
+            setTweaksOpen(false);
+            setShortcutsOpen(true);
+          }}
+        >
+          Raccourcis clavier
+        </button>
+
         {aiBoot?.compiled && (
           <>
             <TweakSection label="Assistant IA" />
@@ -2936,6 +2958,13 @@ function App() {
           </>
         )}
       </TweaksPanel>
+
+      {shortcutsOpen && (
+        <ShortcutsModal
+          showAi={!!aiBoot?.compiled}
+          onClose={() => setShortcutsOpen(false)}
+        />
+      )}
 
       {pdfModalOpen && (
         <PdfExportModal
