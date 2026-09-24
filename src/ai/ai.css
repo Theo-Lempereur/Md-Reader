@@ -892,6 +892,118 @@ button.ai-chip.add svg {
 .ai-fold:hover {
   color: var(--accent);
 }
+
+/* Bascule Aperçu / Source du panneau de diff. */
+.ai-view-toggle {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.ai-view-toggle button {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+  padding: 2px 8px;
+  border-radius: calc(var(--radius-sm) - 2px);
+  cursor: pointer;
+}
+.ai-view-toggle button:hover {
+  color: var(--text);
+}
+.ai-view-toggle button.on {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 0 1px 2px #0000001a;
+}
+
+/* ---------------------------------------------------------------- Diff rendu (aperçu) */
+
+.ai-pv-body.reading {
+  max-width: none;
+  margin: 0;
+  padding: 10px 14px 4px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.ai-hunk.rejected .ai-pv-body {
+  opacity: 0.45;
+}
+.ai-pv-body.reading h1,
+.ai-pv-body.reading h2,
+.ai-pv-body.reading h3,
+.ai-pv-body.reading h4,
+.ai-pv-body.reading h5,
+.ai-pv-body.reading h6 {
+  margin: 0.2em 0 0.4em;
+}
+.ai-pv-body.reading h1 {
+  font-size: 1.5em;
+}
+.ai-pv-body.reading h2 {
+  font-size: 1.28em;
+}
+.ai-pv-body.reading table {
+  min-width: 0;
+}
+.ai-pv-body.reading pre {
+  font-size: 12px;
+}
+.ai-pv-item {
+  margin: 0 -14px 6px;
+  padding: 2px 14px 0;
+  border-left: 3px solid transparent;
+}
+.ai-pv-item > :last-child {
+  margin-bottom: 6px;
+}
+.ai-pv-item.same {
+  opacity: 0.5;
+}
+.ai-pv-item.add {
+  background: var(--ai-add-bg);
+  border-left-color: var(--ai-add-fg);
+}
+.ai-pv-item.del {
+  background: var(--ai-del-bg);
+  border-left-color: var(--ai-del-fg);
+  opacity: 0.85;
+}
+.ai-pv-item.del,
+.ai-pv-item.del * {
+  text-decoration: line-through;
+  text-decoration-color: var(--ai-del-fg);
+}
+.ai-pv-item.edit {
+  border-left-color: var(--line-strong);
+}
+.ai-pv-body ins.ai-pv-ins {
+  text-decoration: none;
+  background: var(--ai-add-strong);
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px var(--ai-add-strong);
+}
+.ai-pv-body del.ai-pv-del {
+  color: var(--ai-del-fg);
+  background: var(--ai-del-bg);
+  border-radius: 2px;
+  text-decoration: line-through;
+  text-decoration-color: var(--ai-del-fg);
+}
+.ai-pv-fold {
+  margin: 0 -14px 6px;
+  width: calc(100% + 28px);
+  padding-left: 14px;
+}
+.ai-pv-empty {
+  margin: 0;
+  padding: 10px 14px;
+  font-size: 12.5px;
+}
 .ai-diff-foot {
   display: flex;
   align-items: center;

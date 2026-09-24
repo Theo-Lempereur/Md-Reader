@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Icon } from "../../components/Icons";
 import { applyPatchNow, discardPatch, getBridge } from "../actions";
 import { obsoleteHunkIds } from "../diff/apply";
 import { hunkStats } from "../diff/diff";
+import { buildPreview, type PvCard } from "../diff/preview";
+import { AiDiffPreview } from "./AiDiffPreview";
 import { updatePatch, useAi } from "../useAi";
 import type { Hunk, HunkLine, HunkStatus } from "../types";
 
@@ -82,9 +84,35 @@ const statusLabel: Record<HunkStatus, string> = {
   obsolete: "Obsolète",
 };
 
+type DiffView = "preview" | "source";
+const VIEW_KEY = "md-reader.ai.diffView";
+
+function loadView(): DiffView {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "source" ? "source" : "preview";
+  } catch {
+    return "preview";
+  }
+}
+
 export function AiDiffPanel({ patchId, onClose }: { patchId: string; onClose: () => void }) {
   const patch = useAi((s) => s.patches[patchId]);
   const [obsolete, setObsolete] = useState<Set<string>>(new Set());
+  const [view, setViewState] = useState<DiffView>(loadView);
+  const setView = (v: DiffView) => {
+    setViewState(v);
+    try {
+      localStorage.setItem(VIEW_KEY, v);
+    } catch {
+      /* stockage indisponible : le choix vaut pour la session */
+    }
+  };
+  // Le contenu d'un patch ne change jamais, seuls les statuts des hunks bougent.
+  const cards = useMemo(
+    () => (patch ? buildPreview(patch.baseContent, patch.nextContent, patch.hunks) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [patch?.id],
+  );
 
   // L'utilisateur peut continuer à écrire pendant la relecture : on vérifie
   // régulièrement quels hunks ne s'appliquent plus.
@@ -124,6 +152,22 @@ export function AiDiffPanel({ patchId, onClose }: { patchId: string; onClose: ()
       ...p,
       hunks: p.hunks.map((h) => (h.id === id ? { ...h, status: h.status === status ? "pending" : status } : h)),
     }));
+  const byId = new Map(patch.hunks.map((h) => [h.id, h]));
+  /** Statut d'une carte : celui de ses hunks s'ils concordent. */
+  const cardStatus = (card: PvCard): HunkStatus | "mixed" => {
+    const sts = card.hunkIds.map((id) => effective(byId.get(id)!));
+    const live = sts.filter((st) => st !== "obsolete");
+    if (!live.length) return "obsolete";
+    return live.every((st) => st === live[0]) ? live[0] : "mixed";
+  };
+  const setCardStatus = (card: PvCard, status: HunkStatus) => {
+    const next = cardStatus(card) === status ? "pending" : status;
+    const ids = new Set(card.hunkIds.filter((id) => !obsolete.has(id)));
+    updatePatch(patch.id, (p) => ({
+      ...p,
+      hunks: p.hunks.map((h) => (ids.has(h.id) ? { ...h, status: next } : h)),
+    }));
+  };
   const inReview = patch.state === "review";
 
   return (
@@ -133,6 +177,28 @@ export function AiDiffPanel({ patchId, onClose }: { patchId: string; onClose: ()
         <span className="side-kind ai-add-count">+{stats.added}</span>
         <span className="side-kind ai-del-count">−{stats.removed}</span>
         <span className="side-spacer" />
+        <div className="ai-view-toggle" role="tablist" aria-label="Affichage des modifications">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "preview"}
+            className={view === "preview" ? "on" : ""}
+            title="Voir les modifications telles qu'elles apparaîtront dans le document"
+            onClick={() => setView("preview")}
+          >
+            Aperçu
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "source"}
+            className={view === "source" ? "on" : ""}
+            title="Voir les modifications ligne à ligne dans le markdown"
+            onClick={() => setView("source")}
+          >
+            Source
+          </button>
+        </div>
         <button className="icon-btn" title="Fermer (la modification reste disponible dans le chat)" onClick={onClose}>
           <Icon.Close />
         </button>
@@ -145,7 +211,51 @@ export function AiDiffPanel({ patchId, onClose }: { patchId: string; onClose: ()
         </div>
       )}
       <div className="ai-diff-body">
-        {patch.hunks.map((h, idx) => {
+        {view === "preview" &&
+          cards.map((card, idx) => {
+            const st = cardStatus(card);
+            const shown: HunkStatus = st === "mixed" ? "pending" : st;
+            return (
+              <div key={card.hunkIds.join(" ")} className={`ai-hunk ${shown}`}>
+                <div className="ai-hunk-head">
+                  <span>Modification {idx + 1}</span>
+                  {st === "mixed" ? (
+                    <span className="ai-hunk-status">Partiel</span>
+                  ) : (
+                    statusLabel[st] && <span className={`ai-hunk-status ${st}`}>{statusLabel[st]}</span>
+                  )}
+                  <span className="ai-spacer" />
+                  <button
+                    type="button"
+                    title="Aller à ce passage dans le document"
+                    onClick={() => getBridge().revealLine(patch.tabId, card.revealLine)}
+                  >
+                    <Icon.Target />
+                  </button>
+                  {inReview && st !== "obsolete" && (
+                    <>
+                      <button
+                        type="button"
+                        className={st === "rejected" ? "on reject" : ""}
+                        onClick={() => setCardStatus(card, "rejected")}
+                      >
+                        Refuser
+                      </button>
+                      <button
+                        type="button"
+                        className={st === "accepted" ? "on accept" : ""}
+                        onClick={() => setCardStatus(card, "accepted")}
+                      >
+                        <Icon.Check /> Accepter
+                      </button>
+                    </>
+                  )}
+                </div>
+                <AiDiffPreview card={card} />
+              </div>
+            );
+          })}
+        {view === "source" && patch.hunks.map((h, idx) => {
           const st = effective(h);
           return (
             <div key={h.id} className={`ai-hunk ${st}`}>

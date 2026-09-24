@@ -355,7 +355,7 @@ function isEscaped(text: string, index: number): boolean {
   return slashCount % 2 === 1;
 }
 
-function splitTableRow(line: string): string[] {
+export function splitTableRow(line: string): string[] {
   let text = line.trim();
   if (text.startsWith("|")) text = text.slice(1);
   if (text.endsWith("|") && !isEscaped(text, text.length - 1)) {
