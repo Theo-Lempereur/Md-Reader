@@ -2497,7 +2497,8 @@ select.twk-field {
 .twk-launcher {
   position: fixed;
   right: 16px;
-  bottom: 16px;
+  /* Au-dessus de la barre d'état (26px) pour ne pas masquer « Markdown ». */
+  bottom: 38px;
   z-index: 2147483645;
   width: 36px;
   height: 36px;
